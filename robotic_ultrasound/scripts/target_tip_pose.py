@@ -11,43 +11,78 @@ from std_msgs.msg import Float64MultiArray
 from pyrealsense2 import pyrealsense2 as rs
 
 
+pub = rospy.Publisher('cmd_pos', Float64MultiArray, queue_size=1)
+msg2send = Float64MultiArray()
+
+'''
+---------------------constant transformations-----------------------------
+'''
+# transformation from base to eef (recorded at home pose, for debug purpose)
+
+T_O_8 = np.array([[-0.024062954327523797, -0.9997104395513141, -0.00010621275608472814, 0.0],
+                  [-0.9993318188401705, 0.024056764463824314, -
+                      0.027517048118005913, 0.0],
+                  [0.02751163540446256, -0.0005559996853696569, -
+                      0.9996213286948822, 0.0],
+                  [0.2630838979341657, 0.025773767503980968, 0.275502462701254, 1.0]]).transpose()
+
+# T_O_8 = None
+
+# transformation from last joint to camera [m]
+T_8_ee = np.array([[1.0, 0.0, 0.0, 0.0],
+                   [0.0, 1.0, 0.0, 0.0],
+                   [0.0, 0.0, 1.0, 0.0],
+                   [0.0, 0.0, 0.0, 1.0]])
+# T_8_ee = np.array([[1.0, 0.0, 0.0, 0.0],
+#                    [0.0, 1.0, 0.0, 0.0],
+#                    [0.0, 0.0, 1.0, 0.295],
+#                    [0.0, 0.0, 0.0, 1.0]])
+
+# transformation from custom eef to camera [m]
+T_ee_cam = np.array([[1.000, 0.0, 0.0, -0.0175],
+                     [0.0, 0.9239, -0.3827, -0.0886180],
+                     [0.0, 0.3827, 0.9239, -0.3233572],
+                     [0.0, 0.0, 0.0, 1.0]])
+'''
+--------------------------------------------------------------------------
+'''
+
+
 def ee_callback(data):
-    global T_0_8
     EE_pos = data.O_T_EE  # inv 4x4 matrix
-    T_0_8 = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
+    global T_O_8
+    T_O_8 = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
                       EE_pos[12:16]]).transpose()
     ee_sub.unregister()
 
 
-def T_0_cam(tar_pose):
-    global ee_sub
+ee_sub = rospy.Subscriber(
+    "franka_state_controller/franka_states", FrankaState, ee_callback)
+
+
+def convert2base(tar_pose):
+    # transformation from camera to target
     T_cam_tar = np.array([[tar_pose[0], tar_pose[3], tar_pose[6], tar_pose[9]],
-                          [tar_pose[1], tar_pose[4], tar_pose[5], tar_pose[10]],
-                          [tar_pose[2], tar_pose[5], tar_pose[6], tar_pose[11]],
+                          [tar_pose[1], tar_pose[4], tar_pose[7], tar_pose[10]],
+                          [tar_pose[2], tar_pose[5], tar_pose[8], tar_pose[11]],
                           [0.0, 0.0, 0.0, 1.0]])
-
-    # transformation from last joint to camera
-    T_8_cam = np.array([[0.999, 0.0, 0.0, 0.0],
-                        [0.0, -0.999, 0.0, -0.035],
-                        [0.0, 0.0, -0.999, 0.16],
-                        [0.0, 0.0, 0.0, 1.0]])
-
-    ee_sub = rospy.Subscriber(
-        "franka_state_controller/franka_states", FrankaState, ee_callback)
-
-    T_0_cam = np.matmul(T_0_8, T_8_cam)
-    T_0_tar = np.matmul(T_0_cam, T_cam_tar)
-
-    return T_0_tar
+    # print(T_O_8)
+    if T_O_8 is not None:
+        T_O_ee = np.matmul(T_O_8, T_8_ee)
+        T_O_cam = np.matmul(T_O_ee, T_ee_cam)
+        T_O_tar = np.matmul(T_O_cam, T_cam_tar)
+    else:
+        T_O_tar = [-1.0, -1.0, -1.0, -1.0, -1.0, -
+                   1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    return T_O_tar
 
 
 def pub_pos(point_x, point_y, point_z):
-    pub = rospy.Publisher('cmd_pos', Float64MultiArray, queue_size=1)
     if len(point_x) > 0:
         # z component
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
-        Pz = my_floor(np.add(Vz, P0), 3)
+        # Pz = my_floor(np.add(Vz, P0), 3)
         # x component
         xx = 1.0
         yx = 0.0
@@ -57,13 +92,18 @@ def pub_pos(point_x, point_y, point_z):
         # y component
         Vy = np.cross(Vz, Vx)
         Vy = my_floor(Vy/np.linalg.norm(Vy), 3)
-        tar_pose = np.array([Vx, Vy, Vz, Pz]).flatten()
-        # print(tar_pose)
+        tar_pose = np.array([Vx, Vy, Vz, P0]).flatten()
+        # print(np.array([Vx, Vy, Vz, P0]))
+        T_O_tar = convert2base(tar_pose)
     else:
-        tar_pose = [-1.0, -1.0, -1.0, -1.0, -1.0, -
-                    1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, ]
-    msg2send = Float64MultiArray()
-    msg2send.data = tar_pose
+        T_O_tar = [-1.0, -1.0, -1.0, -1.0, -1.0, -
+                   1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+
+    packed_data = np.transpose(
+        np.array([T_O_tar[0], T_O_tar[1], T_O_tar[2]])).flatten()
+    print(T_O_tar)
+    # print(packed_data)
+    msg2send.data = packed_data
     if not rospy.is_shutdown():
         pub.publish(msg2send)
 
@@ -102,8 +142,8 @@ def getSurfaceNormal(point_x, point_y, point_z):
     norm7 = getNormalVector(P0, P7, P8)
     norm8 = getNormalVector(P0, P1, P8)
 
+    # averaging + normalization
     norm_vec = norm1+norm2+norm3+norm4+norm5+norm6+norm7+norm8
-    norm_vec = - norm_vec  # make vector pointing inwards the surface
     norm_vec = norm_vec/np.linalg.norm(norm_vec)
     return norm_vec
 
@@ -112,27 +152,27 @@ def my_floor(a, precision=0):
     return np.round(a - 0.5 * 10**(-precision), precision)
 
 
-def ROIshape(center, side=12):
+def ROIshape(center, edge=12):
     # square region
     col_vec = [center[0],
-               center[0]-side/2,
-               center[0]-side/2,
-               center[0]-side/2,
+               center[0]-edge/2,
+               center[0]-edge/2,
+               center[0]-edge/2,
                center[0],
-               center[0]+side/2,
-               center[0]+side/2,
-               center[0]+side/2,
+               center[0]+edge/2,
+               center[0]+edge/2,
+               center[0]+edge/2,
                center[0]]
 
     row_vec = [center[1],
-               center[1]+side/2,
+               center[1]+edge/2,
                center[1],
-               center[1]-side/2,
-               center[1]-side/2,
-               center[1]-side/2,
+               center[1]-edge/2,
+               center[1]-edge/2,
+               center[1]-edge/2,
                center[1],
-               center[1]+side/2,
-               center[1]+side/2]
+               center[1]+edge/2,
+               center[1]+edge/2]
     return col_vec, row_vec
 
 
@@ -224,12 +264,13 @@ def main():
             pub_pos(point_x, point_y, point_z)
 
             # Stack both images horizontally
-            images = np.vstack((color_image, depth_colormap))
+            # images = np.vstack((color_image, depth_colormap))
 
             # Show images
             cv2.namedWindow('RealSense', cv2.WINDOW_AUTOSIZE)
-            cv2.imshow('RealSense', images)
+            cv2.imshow('RealSense', color_image)
 
+            # keyboard control
             key = cv2.waitKey(1)
             if key & 0xFF == ord('q') or key == 27:
                 print('quit')
