@@ -25,17 +25,22 @@ class CartesianPoseExampleController
   bool init(hardware_interface::RobotHW* robot_hardware, ros::NodeHandle& node_handle) override;
   void starting(const ros::Time&) override;
   void update(const ros::Time&, const ros::Duration& period) override;
-  void pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg);
+
+  void target_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg);
+  void entry_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg);
 
  private:
   franka_hw::FrankaPoseCartesianInterface* cartesian_pose_interface_;
   std::unique_ptr<franka_hw::FrankaCartesianPoseHandle> cartesian_pose_handle_;
   ros::Duration elapsed_time_;
   std::array<double, 16> initial_pose_{};
+
   std::array<double, 16> current_pose_{};
   std::array<double, 12> target_pose_{};
+  std::array<double, 12> entry_pose_{};
   ros::NodeHandle nh_;         // node handle
-  ros::Subscriber target_msg;  // subscriber to target eef pose
+  ros::Subscriber target_msg;  // subscriber to eef target pose
+  ros::Subscriber entry_msg;   // subscriber to eef entry pose
 };
 
 }  // namespace franka_example_controllers

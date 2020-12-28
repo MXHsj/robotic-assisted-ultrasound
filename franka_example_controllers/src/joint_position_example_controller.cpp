@@ -67,7 +67,7 @@ void JointPositionExampleController::starting(const ros::Time& /* time */) {
 }
 
 double kp = 0.0005;
-double max_increment = 0.00025;
+double max_increment = 0.00015;
 double stop_threshold = 0.05;
 std::array<double, 7> q_start{{0, -1.0, 0.12, -2.5, 0.12, 1.5, 1.67}};
 

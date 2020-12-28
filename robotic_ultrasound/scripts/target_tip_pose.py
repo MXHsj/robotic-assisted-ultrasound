@@ -11,29 +11,27 @@ from std_msgs.msg import Float64MultiArray
 from pyrealsense2 import pyrealsense2 as rs
 
 
-pub = rospy.Publisher('cmd_pos', Float64MultiArray, queue_size=1)
-msg2send = Float64MultiArray()
+tar_pub = rospy.Publisher('target_pose', Float64MultiArray, queue_size=1)
+ent_pub = rospy.Publisher('entry_pose', Float64MultiArray, queue_size=1)
+tar_msg = Float64MultiArray()
+ent_msg = Float64MultiArray()
 
 '''
 ---------------------constant transformations-----------------------------
 '''
 # transformation from base to eef (recorded at home pose, for debug purpose)
 
-T_O_8 = np.array([[-0.024062954327523797, -0.9997104395513141, -0.00010621275608472814, 0.0],
-                  [-0.9993318188401705, 0.024056764463824314, -
-                      0.027517048118005913, 0.0],
-                  [0.02751163540446256, -0.0005559996853696569, -
-                      0.9996213286948822, 0.0],
-                  [0.2630838979341657, 0.025773767503980968, 0.275502462701254, 1.0]]).transpose()
+# T_O_ee = np.array([[-0.024062954327523797, -0.9997104395513141, -0.00010621275608472814, 0.0],
+#                    [-0.9993318188401705, 0.024056764463824314, -
+#                     0.027517048118005913, 0.0],
+#                    [0.02751163540446256, -0.0005559996853696569, -
+#                     0.9996213286948822, 0.0],
+#                    [0.2630838979341657, 0.025773767503980968, 0.275502462701254, 1.0]]).transpose()
 
-# T_O_8 = None
+T_O_ee = None
 
-# transformation from last joint to camera [m]
-T_8_ee = np.array([[1.0, 0.0, 0.0, 0.0],
-                   [0.0, 1.0, 0.0, 0.0],
-                   [0.0, 0.0, 1.0, 0.0],
-                   [0.0, 0.0, 0.0, 1.0]])
-# T_8_ee = np.array([[1.0, 0.0, 0.0, 0.0],
+# transformation from flange to eef [m]
+# T_F_ee = np.array([[1.0, 0.0, 0.0, 0.0],
 #                    [0.0, 1.0, 0.0, 0.0],
 #                    [0.0, 0.0, 1.0, 0.295],
 #                    [0.0, 0.0, 0.0, 1.0]])
@@ -50,9 +48,9 @@ T_ee_cam = np.array([[1.000, 0.0, 0.0, -0.0175],
 
 def ee_callback(data):
     EE_pos = data.O_T_EE  # inv 4x4 matrix
-    global T_O_8
-    T_O_8 = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
-                      EE_pos[12:16]]).transpose()
+    global T_O_ee
+    T_O_ee = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
+                       EE_pos[12:16]]).transpose()
     ee_sub.unregister()
 
 
@@ -66,9 +64,8 @@ def convert2base(tar_pose):
                           [tar_pose[1], tar_pose[4], tar_pose[7], tar_pose[10]],
                           [tar_pose[2], tar_pose[5], tar_pose[8], tar_pose[11]],
                           [0.0, 0.0, 0.0, 1.0]])
-    # print(T_O_8)
-    if T_O_8 is not None:
-        T_O_ee = np.matmul(T_O_8, T_8_ee)
+    # print(T_O_ee)
+    if T_O_ee is not None:
         T_O_cam = np.matmul(T_O_ee, T_ee_cam)
         T_O_tar = np.matmul(T_O_cam, T_cam_tar)
     else:
@@ -78,11 +75,10 @@ def convert2base(tar_pose):
 
 
 def pub_pos(point_x, point_y, point_z):
-    if len(point_x) > 0:
+    if len(point_x) > 0:        # when start streaming data
         # z component
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
-        # Pz = my_floor(np.add(Vz, P0), 3)
         # x component
         xx = 1.0
         yx = 0.0
@@ -92,20 +88,31 @@ def pub_pos(point_x, point_y, point_z):
         # y component
         Vy = np.cross(Vz, Vx)
         Vy = my_floor(Vy/np.linalg.norm(Vy), 3)
-        tar_pose = np.array([Vx, Vy, Vz, P0]).flatten()
-        # print(np.array([Vx, Vy, Vz, P0]))
+        # entry point along normal vector
+        dist_coeff = 0.07
+        Pz = np.subtract(P0, [dist_coeff*Vzi for Vzi in Vz])
+        ent_pose = np.array([Vx, Vy, Vz, Pz]).flatten()   # entry point
+        tar_pose = np.array([Vx, Vy, Vz, P0]).flatten()   # actual target
         T_O_tar = convert2base(tar_pose)
-    else:
+        T_O_ent = convert2base(ent_pose)
+    else:   # TODO change to 4x4 form
         T_O_tar = [-1.0, -1.0, -1.0, -1.0, -1.0, -
                    1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+        T_O_ent = [-1.0, -1.0, -1.0, -1.0, -1.0, -
+                   1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
 
-    packed_data = np.transpose(
+    print("entry: \n", T_O_ent)
+    print("target: \n", T_O_tar)
+
+    tar_packed = np.transpose(
         np.array([T_O_tar[0], T_O_tar[1], T_O_tar[2]])).flatten()
-    print(T_O_tar)
-    # print(packed_data)
-    msg2send.data = packed_data
+    ent_packed = np.transpose(
+        np.array([T_O_ent[0], T_O_ent[1], T_O_ent[2]])).flatten()
+    tar_msg.data = tar_packed
+    ent_msg.data = ent_packed
     if not rospy.is_shutdown():
-        pub.publish(msg2send)
+        tar_pub.publish(tar_msg)
+        ent_pub.publish(ent_msg)
 
 
 def getNormalVector(p0, p1, p2):

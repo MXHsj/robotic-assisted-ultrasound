@@ -70,7 +70,7 @@ bool CartesianPoseExampleController::init(hardware_interface::RobotHW* robot_har
   return true;
 }
 
-void CartesianPoseExampleController::pos_callback(
+void CartesianPoseExampleController::target_pos_callback(
     const std_msgs::Float64MultiArray::ConstPtr& msg) {
   for (size_t i = 0; i < 12; i++) {
     target_pose_[i] = msg->data[i];
@@ -79,21 +79,108 @@ void CartesianPoseExampleController::pos_callback(
   // std::cout << std::endl;
 }
 
+void CartesianPoseExampleController::entry_pos_callback(
+    const std_msgs::Float64MultiArray::ConstPtr& msg) {
+  for (size_t i = 0; i < 12; i++) {
+    entry_pose_[i] = msg->data[i];
+    // std::cout << entry_pose_[i] << " ";
+  }
+  // std::cout << std::endl;
+}
+
+void updatePose(ros::Duration& totalTimeElapse, std::array<double, 16>& curr_pose_) {
+  std::cout << totalTimeElapse << "[s] current pose:" << std::endl;
+  for (int col = 0; col < 4; col++) {
+    for (int row = 0; row < 4; row++) {
+      std::cout << curr_pose_[col + row * 4] << " ";
+    }
+    std::cout << std::endl;
+  }
+}
+
+void calcNewPose(const std::array<double, 12>& curr_goal,
+                 const std::array<double, 16>& curr_pose,
+                 std::array<double, 16>& cmd_pose,
+                 bool& reachedFlag) {
+  // params
+  double rot_increment = 0.0000008;
+  double tran_increment = 0.0000008;
+  double trans_goal_thresh = 0.001;  // higher accuracy in translation
+  double rot_goal_thresh = 0.008;    // less accuracy in rotation
+  // flags
+  bool isReachedRotX = true;
+  bool isReachedRotY = true;
+  bool isReachedRotZ = true;
+  bool isReachedTrans = true;
+
+  if (curr_goal[0] != -1) {
+    // rot x
+    for (int ix = 0; ix < 3; ix++) {
+      if (std::abs(curr_goal[ix] - curr_pose[ix]) > rot_goal_thresh) {
+        // cmd_pose[0] += copysign(increment, (target_pose_[0] - current_pose_[0]));
+        // cmd_pose[1] += copysign(increment, (target_pose_[1] - current_pose_[1]));
+        // cmd_pose[2] += copysign(increment, (target_pose_[2] - current_pose_[2]));
+        cmd_pose[ix] += copysign(rot_increment, (curr_goal[ix] - curr_pose[ix]));
+        isReachedRotX = false;
+      }
+    }
+    // rot y
+    for (int iy = 3; iy < 6; iy++) {
+      if (std::abs(curr_goal[iy] - curr_pose[iy + 1]) > rot_goal_thresh) {
+        // cmd_pose[4] += copysign(increment, (target_pose_[3] - current_pose_[4]));
+        // cmd_pose[5] += copysign(increment, (target_pose_[4] - current_pose_[5]));
+        // cmd_pose[6] += copysign(increment, (target_pose_[5] - current_pose_[6]));
+        cmd_pose[iy + 1] += copysign(rot_increment, (curr_goal[iy] - curr_pose[iy + 1]));
+        isReachedRotY = false;
+      }
+    }
+    // rot z
+    for (int iz = 6; iz < 9; iz++) {
+      if (std::abs(curr_goal[iz] - curr_pose[iz + 2]) > rot_goal_thresh) {
+        // cmd_pose[8] += copysign(increment, (target_pose_[6] - current_pose_[8]));
+        // cmd_pose[9] += copysign(increment, (target_pose_[7] - current_pose_[9]));
+        // cmd_pose[10] += copysign(increment, (target_pose_[8] - current_pose_[10]));
+        cmd_pose[iz + 2] += copysign(rot_increment, (curr_goal[iz] - curr_pose[iz + 2]));
+        isReachedRotZ = false;
+      }
+    }
+    // Px; Py; Pz
+    for (int it = 9; it < 12; it++) {
+      if (std::abs(curr_goal[it] - curr_pose[it + 3]) > trans_goal_thresh) {
+        // cmd_pose[12] += copysign(increment, (target_pose_[9] - current_pose_[12]));
+        // cmd_pose[13] += copysign(increment, (target_pose_[10] - current_pose_[13]));
+        // cmd_pose[14] += copysign(increment, (target_pose_[11] - current_pose_[14]));
+        cmd_pose[it + 3] += copysign(tran_increment, (curr_goal[it] - curr_pose[it + 3]));
+        isReachedTrans = false;
+      }
+    }
+  }
+
+  if (isReachedRotX && isReachedRotY && isReachedRotZ && isReachedTrans) {
+    reachedFlag = true;
+  }
+}
+
 void CartesianPoseExampleController::starting(const ros::Time& /* time */) {
   initial_pose_ = cartesian_pose_handle_->getRobotState().O_T_EE_d;
   elapsed_time_ = ros::Duration(0.0);
-  target_msg = nh_.subscribe("cmd_pos", 1, &CartesianPoseExampleController::pos_callback, this);
+  target_msg =
+      nh_.subscribe("target_pose", 1, &CartesianPoseExampleController::target_pos_callback, this);
+  entry_msg =
+      nh_.subscribe("entry_pose", 1, &CartesianPoseExampleController::entry_pos_callback, this);
 }
 
-// params
-double rot_increment = 0.0000008;
-double tran_increment = 0.0000008;
-double goal_threshold = 0.0005;
+// initial conditions
+double current_time = 0.0;
+double last_time = 0.0;
+bool isReachedWp = false;
+bool isReachedTar = false;
 
 void CartesianPoseExampleController::update(const ros::Time& /* time */,
                                             const ros::Duration& period) {
   // -------------------------------------------------------------------------
   elapsed_time_ += period;
+  current_time = elapsed_time_.toSec();
 
   // double radius = 0.3;
   // double angle = M_PI / 4 * (1 - std::cos(M_PI / 5.0 * elapsed_time_.toSec()));
@@ -105,46 +192,24 @@ void CartesianPoseExampleController::update(const ros::Time& /* time */,
   // cartesian_pose_handle_->setCommand(new_pose);
   // -------------------------------------------------------------------------
   current_pose_ = cartesian_pose_handle_->getRobotState().O_T_EE_d;
+
+  if (current_time - last_time > 20.0) {  // report current pose every 20 seconds
+    updatePose(elapsed_time_, current_pose_);
+    std::cout << "Entry point: " << isReachedWp << " Target: " << isReachedTar << std::endl;
+    last_time = current_time;
+  }
+
   std::array<double, 16> new_pose = current_pose_;
 
-  if (target_pose_[0] != -1) {
-    // rot x
-    for (int ix = 0; ix < 3; ix++) {
-      if (std::abs(target_pose_[ix] - current_pose_[ix]) > goal_threshold) {
-        new_pose[ix] += copysign(rot_increment, (target_pose_[ix] - current_pose_[ix]));
-        // new_pose[0] += copysign(increment, (target_pose_[0] - current_pose_[0]));
-        // new_pose[1] += copysign(increment, (target_pose_[1] - current_pose_[1]));
-        // new_pose[2] += copysign(increment, (target_pose_[2] - current_pose_[2]));
-      }
-    }
-    // rot y
-    for (int iy = 3; iy < 6; iy++) {
-      if (std::abs(target_pose_[iy] - current_pose_[iy + 1]) > goal_threshold) {
-        new_pose[iy + 1] += copysign(rot_increment, (target_pose_[iy] - current_pose_[iy + 1]));
-        // new_pose[4] += copysign(increment, (target_pose_[3] - current_pose_[4]));
-        // new_pose[5] += copysign(increment, (target_pose_[4] - current_pose_[5]));
-        // new_pose[6] += copysign(increment, (target_pose_[5] - current_pose_[6]));
-      }
-    }
-    // rot z
-    for (int iz = 6; iz < 9; iz++) {
-      if (std::abs(target_pose_[iz] - current_pose_[iz + 2]) > goal_threshold) {
-        new_pose[iz + 2] += copysign(rot_increment, (target_pose_[iz] - current_pose_[iz + 2]));
-        // new_pose[8] += copysign(increment, (target_pose_[6] - current_pose_[8]));
-        // new_pose[9] += copysign(increment, (target_pose_[7] - current_pose_[9]));
-        // new_pose[10] += copysign(increment, (target_pose_[8] - current_pose_[10]));
-      }
-    }
-    // Px; Py; Pz
-    for (int it = 9; it < 12; it++) {
-      if (std::abs(target_pose_[it] - current_pose_[it + 3]) > goal_threshold) {
-        new_pose[it + 3] += copysign(tran_increment, (target_pose_[it] - current_pose_[it + 3]));
-        // new_pose[12] += copysign(increment, (target_pose_[9] - current_pose_[12]));
-        // new_pose[13] += copysign(increment, (target_pose_[10] - current_pose_[13]));
-        // new_pose[14] += copysign(increment, (target_pose_[11] - current_pose_[14]));
-      }
-    }
+  if ((!isReachedWp) && (!isReachedTar)) {
+    calcNewPose(entry_pose_, current_pose_, new_pose, isReachedWp);  // go to entry point
+  } else if ((isReachedWp) && (!isReachedTar)) {
+    calcNewPose(target_pose_, current_pose_, new_pose, isReachedTar);  // go to target
+  } else if ((isReachedWp) && (isReachedTar)) {
+    std::cout << "goal reached !!" << std::endl;
+    isReachedWp = false;
   }
+
   cartesian_pose_handle_->setCommand(new_pose);
 }
 
