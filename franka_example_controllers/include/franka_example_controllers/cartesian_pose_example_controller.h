@@ -33,14 +33,20 @@ class CartesianPoseExampleController
   franka_hw::FrankaPoseCartesianInterface* cartesian_pose_interface_;
   std::unique_ptr<franka_hw::FrankaCartesianPoseHandle> cartesian_pose_handle_;
   ros::Duration elapsed_time_;
+  // robot states
   std::array<double, 16> initial_pose_{};
-
   std::array<double, 16> current_pose_{};
-  std::array<double, 12> target_pose_{};
-  std::array<double, 12> entry_pose_{};
-  ros::NodeHandle nh_;         // node handle
+  std::array<double, 12> target_pose_{};  // column major
+  std::array<double, 12> entry_pose_{};   // column major
+  // node handle & topics
+  ros::NodeHandle nh_;
   ros::Subscriber target_msg;  // subscriber to eef target pose
   ros::Subscriber entry_msg;   // subscriber to eef entry pose
+  // initial conditions
+  double current_time = 0.0;
+  double last_time = 0.0;
+  bool isReachedWp = false;
+  bool isReachedTar = false;
 };
 
 }  // namespace franka_example_controllers

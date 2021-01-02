@@ -170,12 +170,6 @@ void CartesianPoseExampleController::starting(const ros::Time& /* time */) {
       nh_.subscribe("entry_pose", 1, &CartesianPoseExampleController::entry_pos_callback, this);
 }
 
-// initial conditions
-double current_time = 0.0;
-double last_time = 0.0;
-bool isReachedWp = false;
-bool isReachedTar = false;
-
 void CartesianPoseExampleController::update(const ros::Time& /* time */,
                                             const ros::Duration& period) {
   // -------------------------------------------------------------------------
