@@ -12,6 +12,7 @@
 #include <ros/node_handle.h>
 #include <ros/time.h>
 
+#include <std_msgs/Bool.h>
 #include <std_msgs/Float64MultiArray.h>
 
 namespace franka_example_controllers {
@@ -27,6 +28,7 @@ class CartesianVelocityExampleController : public controller_interface::MultiInt
 
   void updatePose(ros::Duration& totalTimeElapse, std::array<double, 16>& curr_pose_);
 
+  inline void isContact_callback(const std_msgs::Bool::ConstPtr& msg) { isContact = msg->data; }
   inline void target_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
     for (size_t i = 0; i < 12; i++) {
       target_pose_[i] = msg->data[i];
@@ -51,13 +53,13 @@ class CartesianVelocityExampleController : public controller_interface::MultiInt
   std::array<double, 6> last_command{};
   // node handle & topics
   ros::NodeHandle nh_;
-  ros::Subscriber target_msg;  // subscriber to eef target pose
-  ros::Subscriber entry_msg;   // subscriber to eef entry pose
+  ros::Subscriber isContact_msg;  // subscribe to operating mode
+  ros::Subscriber target_msg;     // subscribe to eef target pose
+  ros::Subscriber entry_msg;      // subscribe to eef entry pose
   // params
   double current_time;
   double last_time;
-  bool isReachedWp;
-  bool isReachedTar;
+  bool isContact;
 };
 
 }  // namespace franka_example_controllers

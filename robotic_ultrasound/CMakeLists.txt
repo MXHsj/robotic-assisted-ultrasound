@@ -215,7 +215,3 @@ include_directories(
 
 add_executable(test_data_receiver src/test_data_receiver.cpp)
 target_link_libraries(test_data_receiver ${catkin_LIBRARIES})
-
-catkin_install_python(PROGRAMS scripts/test_data_transmit.py scripts/target_tip_pose.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
