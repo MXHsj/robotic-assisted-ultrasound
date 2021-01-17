@@ -74,15 +74,31 @@ bool CartesianVelocityExampleController::init(hardware_interface::RobotHW* robot
   return true;
 }
 
-void CartesianVelocityExampleController::updatePose(ros::Duration& totalTimeElapse,
-                                                    std::array<double, 16>& curr_pose_) {
-  std::cout << totalTimeElapse << "[s] current pose:" << std::endl;
+void CartesianVelocityExampleController::updateStatus() {
+  std::cout << "----------status update----------" << std::endl;
+  std::cout << "total time elapsed:" << elapsed_time_ << "[s]" << std::endl;
+  std::cout << "current pose:" << std::endl;
   for (int col = 0; col < 4; col++) {
     for (int row = 0; row < 4; row++) {
-      std::cout << curr_pose_[col + row * 4] << " ";
+      std::cout << current_pose_[col + row * 4] << " ";
     }
     std::cout << std::endl;
   }
+  std::cout << "target pose:" << std::endl;
+  for (int col = 0; col < 3; col++) {
+    for (int row = 0; row < 4; row++) {
+      std::cout << target_pose_[col + row * 3] << " ";
+    }
+    std::cout << std::endl;
+  }
+  std::cout << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+  std::cout << "current eef wrench:" << std::endl;
+  std::cout << "Fx: " << current_wrench[0] << " Fy: " << current_wrench[1]
+            << " Fz: " << current_wrench[2] << std::endl;
+  std::cout << "last velocity command:" << std::endl;
+  std::cout << "wx: " << last_command[3] << " wy: " << last_command[4] << " wz: " << last_command[5]
+            << std::endl;
+  std::cout << "isContact: " << isContact << std::endl;
 }
 
 std::array<double, 3> rot2rpy(const std::array<double, 9>& rot_mat) {
@@ -105,6 +121,10 @@ std::array<double, 3> rot2rpy(const std::array<double, 9>& rot_mat) {
   } else if (rot_mat[2] > 0) {
     rpy[0] = copysign(rpy[0], -1);
   }
+  // explicitly set sign for pitch
+  if (rot_mat[6] > 0) {
+    rpy[1] = copysign(rpy[1], -1);
+  }
   return rpy;
 }
 
@@ -113,8 +133,8 @@ std::array<double, 3> forceControl(const std::array<double, 12>& curr_goal, cons
   std::array<double, 3> P0{{curr_goal[9], curr_goal[10], curr_goal[11]}};
   // approach vector
   std::array<double, 3> Vz{{curr_goal[6], curr_goal[7], curr_goal[8]}};
-  double Fz_desired = 3.0 + 1.0;        // F = -1 when no load
-  double d = 0.12 * (Fz_desired - Fz);  // force control factor
+  double Fz_desired = 3;
+  double d = 0.08 * (Fz_desired - Fz);  // force control factor
   // new translational component
   std::array<double, 3> Pz{{P0[0] + Vz[0] * d, P0[1] + Vz[1] * d, P0[2] + Vz[2] * d}};
   return Pz;
@@ -145,6 +165,10 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   double e_v_x = curr_goal[9] - curr_pose[12];
   double e_v_y = curr_goal[10] - curr_pose[13];
   double e_v_z = curr_goal[11] - curr_pose[14];
+  double de_v_x = prev_vel[0] - (curr_pose[12] - prev_pose[12]) / dt.toSec();
+  double de_v_y = prev_vel[1] - (curr_pose[13] - prev_pose[13]) / dt.toSec();
+  double de_v_z = prev_vel[2] - (curr_pose[14] - prev_pose[14]) / dt.toSec();
+
   double e_w_x = (goal_rpy[0] - curr_rpy[0]) * rad2deg;
   double e_w_y = (goal_rpy[1] - curr_rpy[1]) * rad2deg;
   double e_w_z = (goal_rpy[2] - curr_rpy[2]) * rad2deg;
@@ -156,15 +180,15 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   double linear_ramp = 0.00001;   // linear velocity increment
   double angular_ramp = 0.00003;  // angular velocity increment
   double linear_max = 0.28;       // maximum linear velocity
-  double angular_max = 0.05;      // maximum angular velocity
+  double angular_max = 0.02;      // maximum angular velocity
 
   // PD velocity command
-  double desired_v_x = 0.1 * e_v_x;
-  double desired_v_y = 0.1 * e_v_y;
-  double desired_v_z = 0.2 * e_v_z;
-  double desired_w_x = 0.00035 * e_w_x + 0.6 * de_w_x;  // kp = 0.015, kd = 0.6
-  double desired_w_y = 0.0008 * e_w_y + 0.2 * de_w_y;   // kp = 0.014, kd = 0.3
-  double desired_w_z = 0.0008 * e_w_z + 0.2 * de_w_z;   // kp = 0.014, kd = 0.3
+  double desired_v_x = 0.1 * e_v_x;                     // kp = 0.1
+  double desired_v_y = 0.1 * e_v_y;                     // kp = 0.1
+  double desired_v_z = 0.15 * e_v_z + 0.15 * de_v_z;    // kp = 0.2, kd = 0.6
+  double desired_w_x = 0.0003 * e_w_x + 0.65 * de_w_x;  // kp = 0.0002, kd = 0.8
+  double desired_w_y = 0.0008 * e_w_y + 0.2 * de_w_y;   // kp = 0.0008, kd = 0.2
+  double desired_w_z = 0.0008 * e_w_z + 0.2 * de_w_z;   // kp = 0.0008, kd = 0.2
   auto cmd_vel = prev_vel;
 
   if (std::abs(cmd_vel[0]) <= linear_max) {
@@ -178,6 +202,24 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   if (std::abs(cmd_vel[2]) <= linear_max) {
     cmd_vel[2] += copysign(linear_ramp, desired_v_z - prev_vel[2]);
   }
+
+  // if (desired_v_x != prev_vel[0]) {
+  //   cmd_vel[0] += copysign(linear_ramp, desired_v_x - prev_vel[0]);
+  // } else {
+  //   cmd_vel[0] += 0.0;
+  // }
+
+  // if (desired_v_y != prev_vel[1]) {
+  //   cmd_vel[1] += copysign(linear_ramp, desired_v_y - prev_vel[1]);
+  // } else {
+  //   cmd_vel[1] += 0.0;
+  // }
+
+  // if (desired_v_z != prev_vel[2]) {
+  //   cmd_vel[2] += copysign(linear_ramp, desired_v_z - prev_vel[2]);
+  // } else {
+  //   cmd_vel[2] += 0.0;
+  // }
 
   if (desired_w_x != prev_vel[3]) {
     cmd_vel[3] += copysign(angular_ramp, desired_w_x - prev_vel[3]);
@@ -197,12 +239,20 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
     cmd_vel[5] += 0.0;
   }
 
-  std::cout << "--------------------------INFO-----------------------------" << std::endl;
-  std::cout << "e_v_x:" << e_v_x << " e_v_y:" << e_v_y << " e_v_z:" << e_v_z << std::endl;
-  std::cout << "e_w_x:" << e_w_x << " e_w_y:" << e_w_y << " e_w_z:" << e_w_z << std::endl;
-  std::cout << "v_x:" << cmd_vel[0] << " v_y:" << cmd_vel[1] << " v_z:" << cmd_vel[2] << std::endl;
-  std::cout << "w_x:" << cmd_vel[3] << " w_y:" << cmd_vel[4] << " w_z:" << cmd_vel[5] << std::endl;
-  std::cout << "-----------------------------------------------------------" << std::endl;
+  for (int vel_idx = 3; vel_idx <= 5; vel_idx++) {
+    cmd_vel[vel_idx] = (std::abs(cmd_vel[vel_idx]) < angular_max)
+                           ? cmd_vel[vel_idx]
+                           : copysign(angular_max, cmd_vel[vel_idx]);
+  }
+
+  // std::cout << "--------------------------INFO-----------------------------" << std::endl;
+  // std::cout << "e_v_x:" << e_v_x << " e_v_y:" << e_v_y << " e_v_z:" << e_v_z << std::endl;
+  // std::cout << "e_w_x:" << e_w_x << " e_w_y:" << e_w_y << " e_w_z:" << e_w_z << std::endl;
+  // std::cout << "v_x:" << cmd_vel[0] << "\tv_y:" << cmd_vel[1] << "\tv_z:" << cmd_vel[2]
+  //           << std::endl;
+  // std::cout << "w_x:" << cmd_vel[3] << "\tw_y:" << cmd_vel[4] << "\tw_z:" << cmd_vel[5]
+  //           << std::endl;
+  // std::cout << "-----------------------------------------------------------" << std::endl;
 
   return cmd_vel;
 }  // namespace franka_example_controllers
@@ -210,6 +260,9 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
 void CartesianVelocityExampleController::starting(const ros::Time& /* time */) {
   initial_pose_ = velocity_cartesian_handle_->getRobotState().O_T_EE_d;
   last_pose_ = initial_pose_;
+  target_pose_ = {{initial_pose_[0], initial_pose_[1], initial_pose_[2], initial_pose_[4],
+                   initial_pose_[5], initial_pose_[6], initial_pose_[8], initial_pose_[9],
+                   initial_pose_[10], initial_pose_[12], initial_pose_[13], initial_pose_[14]}};
   elapsed_time_ = ros::Duration(0.0);
   current_time = 0.0;
   last_time = 0.0;
@@ -219,8 +272,6 @@ void CartesianVelocityExampleController::starting(const ros::Time& /* time */) {
       nh_.subscribe("isContact", 1, &CartesianVelocityExampleController::isContact_callback, this);
   target_msg = nh_.subscribe("target_pose", 1,
                              &CartesianVelocityExampleController::target_pos_callback, this);
-  entry_msg =
-      nh_.subscribe("entry_pose", 1, &CartesianVelocityExampleController::entry_pos_callback, this);
 }
 
 void CartesianVelocityExampleController::update(const ros::Time& /* time */,
@@ -242,32 +293,30 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
   // -------------------------------------------------------------------------
 
   current_pose_ = velocity_cartesian_handle_->getRobotState().O_T_EE_d;
-  auto current_wrench = velocity_cartesian_handle_->getRobotState().K_F_ext_hat_K;
+  current_wrench = velocity_cartesian_handle_->getRobotState().K_F_ext_hat_K;
 
   std::array<double, 6> command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  std::array<double, 12> curr_target = target_pose_;
 
   // recalculate translation under contact mode
   if (isContact) {
-    auto Pz = forceControl(target_pose_, current_wrench[2]);
-    target_pose_[9] = Pz[0];
-    target_pose_[10] = Pz[1];
-    target_pose_[11] = Pz[2];
-    std::cout << "Fx: " << current_wrench[0] << " Fy: " << current_wrench[1]
-              << " Fz: " << current_wrench[2] << std::endl;
+    auto Pz = forceControl(curr_target, current_wrench[2]);
+    curr_target[9] = Pz[0];
+    curr_target[10] = Pz[1];
+    curr_target[11] = Pz[2];
   }
 
-  command = calcNewVel(target_pose_, current_pose_, last_pose_, last_command, period);
+  command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
 
-  // command[0] = -0.00023;     // uncomment if do swipe
+  // command[0] = -0.00023;  // uncomment if do swipe
   velocity_cartesian_handle_->setCommand(command);
   last_command = command;
   last_pose_ = current_pose_;
 
-  // if (current_time - last_time > 10.0) {  // report current status
-  //   updatePose(elapsed_time_, current_pose_);
-  //   std::cout << "Entry point: " << isReachedWp << " Target: " << isReachedTar << std::endl;
-  //   last_time = current_time;
-  // }
+  if (current_time - last_time >= 1.0) {  // report current status
+    updateStatus();
+    last_time = current_time;
+  }
 }
 
 void CartesianVelocityExampleController::stopping(const ros::Time& /*time*/) {

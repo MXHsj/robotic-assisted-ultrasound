@@ -14,6 +14,7 @@
 
 #include <std_msgs/Bool.h>
 #include <std_msgs/Float64MultiArray.h>
+#include <cmath>
 
 namespace franka_example_controllers {
 
@@ -26,17 +27,14 @@ class CartesianVelocityExampleController : public controller_interface::MultiInt
   void starting(const ros::Time&) override;
   void stopping(const ros::Time&) override;
 
-  void updatePose(ros::Duration& totalTimeElapse, std::array<double, 16>& curr_pose_);
+  void updateStatus();
 
   inline void isContact_callback(const std_msgs::Bool::ConstPtr& msg) { isContact = msg->data; }
   inline void target_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
-    for (size_t i = 0; i < 12; i++) {
-      target_pose_[i] = msg->data[i];
-    }
-  }
-  inline void entry_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
-    for (size_t i = 0; i < 12; i++) {
-      entry_pose_[i] = msg->data[i];
+    if (!isnan(msg->data[0])) {
+      for (size_t i = 0; i < 12; i++) {
+        target_pose_[i] = msg->data[i];
+      }
     }
   }
 
@@ -48,9 +46,9 @@ class CartesianVelocityExampleController : public controller_interface::MultiInt
   std::array<double, 16> initial_pose_{};
   std::array<double, 16> current_pose_{};
   std::array<double, 16> last_pose_{};
-  std::array<double, 12> target_pose_{};  // column major
-  std::array<double, 12> entry_pose_{};   // column major
-  std::array<double, 6> last_command{};
+  std::array<double, 12> target_pose_{};   // column major
+  std::array<double, 6> last_command{};    // Vx Vy Vz Wx Wy Wz
+  std::array<double, 6> current_wrench{};  // Fx Fy Fz Mx My Mz
   // node handle & topics
   ros::NodeHandle nh_;
   ros::Subscriber isContact_msg;  // subscribe to operating mode

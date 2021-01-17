@@ -1,20 +1,49 @@
 #! /usr/bin/env python3
 '''
-publish target pose w.r.t realsense
+capture target using realsense & publish target pose
 '''
 import numpy as np
 from cv2 import cv2
-import rospy
-from std_msgs.msg import Float64MultiArray
 from pyrealsense2 import pyrealsense2 as rs
+import rospy
+from franka_msgs.msg import FrankaState
+from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Int16
 
 
-tar_pub = rospy.Publisher('cam_target', Float64MultiArray, queue_size=1)
-tar_msg = Float64MultiArray()
+def ee_callback(msg):
+    EE_pos = msg.O_T_EE_d  # inv 4x4 matrix
+    global T_O_ee
+    T_O_ee = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
+                       EE_pos[12:16]]).transpose()
 
 
-def pub_pos(point_x, point_y, point_z):
-    if len(point_x) > 0:        # when start streaming data
+def pub_key_cmd():
+    if not rospy.is_shutdown():
+        key_cmd_pub.publish(key_cmd_msg)
+
+
+def pub_pose():
+    if not rospy.is_shutdown():
+        reg1_pub.publish(reg1_msg)
+        reg2_pub.publish(reg2_msg)
+        reg3_pub.publish(reg3_msg)
+        reg4_pub.publish(reg4_msg)
+
+
+def convert2base(T_cam_tar):
+    # convert target from camera frame to base frame
+    if T_O_ee is not None:
+        T_O_cam = np.matmul(T_O_ee, T_ee_cam)
+        T_O_tar = np.matmul(T_O_cam, T_cam_tar)
+    else:
+        T_O_tar = float('nan')*np.ones([4, 4])
+        print("no robot info")
+    return T_O_tar
+
+
+def calc_pose(point_x, point_y, point_z):
+    if point_x is not None:
         # z component
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
@@ -27,22 +56,24 @@ def pub_pos(point_x, point_y, point_z):
         # y component
         Vy = np.cross(Vz, Vx)
         Vy = my_floor(Vy/np.linalg.norm(Vy), 3)
-        tar_pose = np.array([Vx, Vy, Vz, P0]).flatten()   # 4x4 target
-        T_cam_tar = np.array([[tar_pose[0], tar_pose[3], tar_pose[6], tar_pose[9]],
-                              [tar_pose[1], tar_pose[4], tar_pose[7], tar_pose[10]],
-                              [tar_pose[2], tar_pose[5], tar_pose[8], tar_pose[11]],
+        # homogenuous transformation
+        cam_tar = np.array([Vx, Vy, Vz, P0]).flatten()
+        T_cam_tar = np.array([[cam_tar[0], cam_tar[3], cam_tar[6], cam_tar[9]],
+                              [cam_tar[1], cam_tar[4], cam_tar[7], cam_tar[10]],
+                              [cam_tar[2], cam_tar[5], cam_tar[8], cam_tar[11]],
                               [0.0, 0.0, 0.0, 1.0]])
+        # entry pose w.r.t base
+        dist_coeff = 0.075
+        Pz = np.subtract(P0, [dist_coeff*Vzi for Vzi in Vz])
+        T_cam_tar[0:3, 3] = Pz
+        T_O_tar = convert2base(T_cam_tar)
     else:
-        T_cam_tar = np.array([[-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0],
-                              [-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0]])
+        T_O_tar = float('nan')*np.ones([4, 4])
 
-    # print("camera target: \n", T_cam_tar)
-
+    print(T_O_tar)
     tar_packed = np.transpose(
-        np.array([T_cam_tar[0], T_cam_tar[1], T_cam_tar[2]])).flatten()
-    tar_msg.data = tar_packed
-    if not rospy.is_shutdown():
-        tar_pub.publish(tar_msg)
+        np.array([T_O_tar[0], T_O_tar[1], T_O_tar[2]])).flatten()
+    return tar_packed
 
 
 def getNormalVector(p0, p1, p2):
@@ -85,10 +116,6 @@ def getSurfaceNormal(point_x, point_y, point_z):
     return norm_vec
 
 
-def my_floor(a, precision=0):
-    return np.round(a - 0.5 * 10**(-precision), precision)
-
-
 def ROIshape(center, edge=12):
     # square region
     col_vec = [center[0],
@@ -111,6 +138,51 @@ def ROIshape(center, edge=12):
                center[1]+edge/2,
                center[1]+edge/2]
     return col_vec, row_vec
+
+
+def my_floor(a, precision=0):
+    return np.round(a - 0.5 * 10**(-precision), precision)
+
+
+# ---------------------constant transformations-----------------------------
+# transformation from base to eef
+# (data recorded at home pose, for debug purpose)
+T_O_ee = np.array([[-0.02406, -0.9997, -0.0001, 0.0],
+                   [-0.999, 0.02405, -0.0275, 0.0],
+                   [0.02751, -0.00055, -0.9996, 0.0],
+                   [0.26308, 0.025773, 0.2755, 1.0]]).transpose()
+# T_O_ee = None
+
+# transformation from custom eef to camera [m]
+T_ee_cam = np.array([[1.000, 0.0, 0.0, -0.0175],
+                     [0.0, 0.9239, -0.3827, -0.0886180],
+                     [0.0, 0.3827, 0.9239, -0.3233572],
+                     [0.0, 0.0, 0.0, 1.0]])
+# --------------------------------------------------------------------------
+
+reg1_pub = rospy.Publisher('reg1_target', Float64MultiArray, queue_size=1)
+reg1_msg = Float64MultiArray()
+reg1_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg2_pub = rospy.Publisher('reg2_target', Float64MultiArray, queue_size=1)
+reg2_msg = Float64MultiArray()
+reg2_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg3_pub = rospy.Publisher('reg3_target', Float64MultiArray, queue_size=1)
+reg3_msg = Float64MultiArray()
+reg3_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg4_pub = rospy.Publisher('reg4_target', Float64MultiArray, queue_size=1)
+reg4_msg = Float64MultiArray()
+reg4_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+key_cmd_pub = rospy.Publisher('keyboard_cmd', Int16, queue_size=1)
+key_cmd_msg = Int16()
+
+rospy.Subscriber('franka_state_controller/franka_states',
+                 FrankaState, ee_callback)
+
+tar_count = 1   # start from region1, stores 4 regions maximum
 
 
 def main():
@@ -138,12 +210,18 @@ def main():
 
     # initialize ros node
     rospy.init_node('camera2target', anonymous=True)
+
     point_x = []
     point_y = []
     point_z = []
 
     isRecoding = False
-    print(" s->update data \n e->freeze data \n q->quit")
+    global tar_count
+    print("-----------camera commands---------")
+    print(" s->update \n e->stop \n p->publish \n r->reset \n q->quit")
+    print("-----------teleop commands---------")
+    print(' t->tele-op mode \n \t j->increase roll \n \t l->decrease roll \n g->execution mode')
+
     try:
         while True:
             # Wait for a coherent pair of frames: depth and color
@@ -166,8 +244,8 @@ def main():
             color_image = np.asanyarray(color_frame.get_data())
 
             # Apply colormap on depth image (image must be converted to 8-bit per pixel first)
-            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(
-                depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(
+            #     depth_image, alpha=0.03), cv2.COLORMAP_JET)
 
             # get corresponding xyz from uv[-1, -1, -1]
             if isRecoding:
@@ -198,8 +276,6 @@ def main():
                 point_y.append(my_floor(norm_vec[1], 3))
                 point_z.append(my_floor(norm_vec[2], 3))
 
-            pub_pos(point_x, point_y, point_z)
-
             # Stack both images horizontally
             # images = np.vstack((color_image, depth_colormap))
 
@@ -213,11 +289,35 @@ def main():
                 print('quit')
                 break
             elif key == ord('s'):
-                isRecoding = True
                 print('update data')
+                isRecoding = True
+            elif key == ord('p'):
+                print('publish data:')
+                tar_packed = calc_pose(point_x, point_y, point_z)
+                if tar_count == 1:
+                    reg1_msg.data = tar_packed
+                elif tar_count == 2:
+                    reg2_msg.data = tar_packed
+                elif tar_count == 3:
+                    reg3_msg.data = tar_packed
+                elif tar_count == 4:
+                    reg4_msg.data = tar_packed
+                tar_count = tar_count + 1 if tar_count < 4 else 1
             elif key == ord('e'):
+                print('stop updating')
                 isRecoding = False
-                print('freeze data')
+            elif key == ord('r'):
+                print('reset targets')
+                reg1_msg.data = float('nan')*np.ones([1, 12]).flatten()
+                reg2_msg.data = float('nan')*np.ones([1, 12]).flatten()
+                reg3_msg.data = float('nan')*np.ones([1, 12]).flatten()
+                reg4_msg.data = float('nan')*np.ones([1, 12]).flatten()
+                tar_count = 1
+            else:
+                key_cmd_msg.data = key
+
+            pub_key_cmd()
+            pub_pose()
 
     finally:
         # Stop streaming

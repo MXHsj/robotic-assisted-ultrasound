@@ -143,7 +143,7 @@ def main():
     point_z = []
 
     isRecoding = False
-    print(" s->update data \n e->freeze data \n q->quit")
+    print(" s->start recording \n e->end recording \n q->quit")
     try:
         while True:
             # Wait for a coherent pair of frames: depth and color
