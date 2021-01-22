@@ -1,20 +1,131 @@
 #! /usr/bin/env python3
 '''
-publish target pose w.r.t realsense
+select target using densepose
 '''
 import numpy as np
 from cv2 import cv2
-import rospy
-from std_msgs.msg import Float64MultiArray
+from numpy.lib.function_base import _calculate_shapes
 from pyrealsense2 import pyrealsense2 as rs
+import rospy
+from franka_msgs.msg import FrankaState
+from rospy import exceptions
+from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Int16
 
 
-tar_pub = rospy.Publisher('cam_target', Float64MultiArray, queue_size=1)
-tar_msg = Float64MultiArray()
+# ---------------- densepose utilities ----------------
+def getBodyPart(IUV, part_id=2):
+    IUV_chest = np.zeros((IUV.shape[0], IUV.shape[1], IUV.shape[2]))
+    torso_idx = np.where(IUV[:, :, 0] == part_id)
+    IUV_chest[torso_idx] = IUV[torso_idx]
+    return IUV_chest
 
 
-def pub_pos(point_x, point_y, point_z):
-    if len(point_x) > 0:        # when start streaming data
+def divide2region(IUV_chest, target_u, target_v):
+    # input target u,v, output target row, col
+    u2xy_pair = np.where(
+        IUV_chest[:, :, 1] == target_u)    # find xy paris in u
+    v2xy_pair = np.where(
+        IUV_chest[:, :, 2] == target_v)    # find xy pairs in v
+
+    rcand = list()
+    ccand = list()
+
+    u_x = u2xy_pair[1]
+    u_y = u2xy_pair[0]
+    v_x = v2xy_pair[1]
+    v_y = v2xy_pair[0]
+
+    # TODO: find x and y collaborately
+    x_intersects = [x for x in u_x if x in v_x]
+    y_intersects = [y for y in u_y if y in v_y]
+
+    rcand = y_intersects
+    ccand = x_intersects
+
+    if len(rcand) > 0 and len(ccand) > 0:
+        cen_col = int(np.mean(ccand))  # averaging col indicies
+        cen_row = int(np.mean(rcand))  # averaging row indicies
+    else:
+        cen_col = -1
+        cen_row = -1
+    return [cen_col, cen_row]
+
+
+def createMask(IUV_chest, frame):
+    opacity = 0.35
+    mask = np.zeros(
+        (IUV_chest.shape[0], IUV_chest.shape[1], IUV_chest.shape[2]))
+    mask[:, :, 2] = IUV_chest[:, :, 0]*110
+    overlay = cv2.addWeighted(mask, opacity, frame, 1.-opacity, -10., dtype=1)
+    return overlay
+
+
+# ---------------- ROS topic utilities ----------------
+def ee_callback(msg):
+    EE_pos = msg.O_T_EE_d  # inv 4x4 matrix
+    global T_O_ee
+    T_O_ee = np.array([EE_pos[0:4], EE_pos[4:8], EE_pos[8:12],
+                       EE_pos[12:16]]).transpose()
+
+
+def pub_key_cmd():
+    if not rospy.is_shutdown():
+        key_cmd_pub.publish(key_cmd_msg)
+
+
+def pub_pose():
+    if not rospy.is_shutdown():
+        reg1_pub.publish(reg1_msg)
+        reg2_pub.publish(reg2_msg)
+        reg3_pub.publish(reg3_msg)
+        reg4_pub.publish(reg4_msg)
+
+
+def convert2base(T_cam_tar):
+    # convert target from camera frame to base frame
+    if T_O_ee is not None:
+        T_O_cam = np.matmul(T_O_ee, T_ee_cam)
+        T_O_tar = np.matmul(T_O_cam, T_cam_tar)
+    else:
+        T_O_tar = float('nan')*np.ones([4, 4])
+        print("no robot info")
+    return T_O_tar
+
+
+# ---------------- surface normal utilities ----------------
+def drawVector(color_image, point_x, point_y, point_z):
+    # 3D to 2D projection
+    # lab realsense
+    camera_matrix = np.array(
+        [[610.899, 0.0, 324.496], [0.0, 610.824, 234.984], [0.0, 0.0, 1.0]])
+    # Ran's realsense
+    # camera_matrix = np.array(
+    #     [[610.899, 0.0, 326.496], [0.0, 610.824, 250.984], [0.0, 0.0, 1.0]])
+    Pc = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]  # world -> camera
+    xyz2uv = np.matmul(camera_matrix, Pc)
+    # draw surface normal vector on the output frame
+    norm_vec = np.array([point_x[-1], point_y[-1], point_z[-1]])
+    Pz_xyz = [point_x[0], point_y[0], point_z[0]] + 0.04*norm_vec
+    Pz_xyz = np.append(Pz_xyz, 1.0)
+    Pz_uv = np.matmul(xyz2uv, Pz_xyz)
+    Pz_uv = [Pz_uv[0]/Pz_uv[2], Pz_uv[1]/Pz_uv[2]]
+    P0_xyz = [point_x[0], point_y[0], point_z[0], 1.0]
+    P0_uv = np.matmul(xyz2uv, P0_xyz)
+    P0_uv = [P0_uv[0]/P0_uv[2], P0_uv[1]/P0_uv[2]]
+    try:
+        cv2.line(color_image,
+                 (int(P0_uv[0]), int(P0_uv[1])),
+                 (int(Pz_uv[0]), int(Pz_uv[1])),
+                 (200, 20, 20), 2)
+    except Exception as e:
+        # print(e)
+        pass
+    return color_image
+
+
+def calc_pose(point_x, point_y, point_z):
+    if point_x is not None:
         # z component
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
@@ -27,22 +138,24 @@ def pub_pos(point_x, point_y, point_z):
         # y component
         Vy = np.cross(Vz, Vx)
         Vy = my_floor(Vy/np.linalg.norm(Vy), 3)
-        tar_pose = np.array([Vx, Vy, Vz, P0]).flatten()   # 4x4 target
-        T_cam_tar = np.array([[tar_pose[0], tar_pose[3], tar_pose[6], tar_pose[9]],
-                              [tar_pose[1], tar_pose[4], tar_pose[7], tar_pose[10]],
-                              [tar_pose[2], tar_pose[5], tar_pose[8], tar_pose[11]],
+        # homogenuous transformation
+        cam_tar = np.array([Vx, Vy, Vz, P0]).flatten()
+        T_cam_tar = np.array([[cam_tar[0], cam_tar[3], cam_tar[6], cam_tar[9]],
+                              [cam_tar[1], cam_tar[4], cam_tar[7], cam_tar[10]],
+                              [cam_tar[2], cam_tar[5], cam_tar[8], cam_tar[11]],
                               [0.0, 0.0, 0.0, 1.0]])
+        # entry pose w.r.t base
+        dist_coeff = 0.075
+        Pz = np.subtract(P0, [dist_coeff*Vzi for Vzi in Vz])
+        T_cam_tar[0:3, 3] = Pz
+        T_O_tar = convert2base(T_cam_tar)
     else:
-        T_cam_tar = np.array([[-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0],
-                              [-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0]])
+        T_O_tar = float('nan')*np.ones([4, 4])
 
-    # print("camera target: \n", T_cam_tar)
-
+    # print(T_O_tar)
     tar_packed = np.transpose(
-        np.array([T_cam_tar[0], T_cam_tar[1], T_cam_tar[2]])).flatten()
-    tar_msg.data = tar_packed
-    if not rospy.is_shutdown():
-        tar_pub.publish(tar_msg)
+        np.array([T_O_tar[0], T_O_tar[1], T_O_tar[2]])).flatten()
+    return tar_packed
 
 
 def getNormalVector(p0, p1, p2):
@@ -113,7 +226,53 @@ def ROIshape(center, edge=12):
     return col_vec, row_vec
 
 
+# ---------------------constant transformations-----------------------------
+# transformation from base to eef
+# (data recorded at home pose, for debug purpose)
+T_O_ee = np.array([[-0.02406, -0.9997, -0.0001, 0.0],
+                   [-0.999, 0.02405, -0.0275, 0.0],
+                   [0.02751, -0.00055, -0.9996, 0.0],
+                   [0.26308, 0.025773, 0.2755, 1.0]]).transpose()
+# T_O_ee = None
+
+# transformation from custom eef to camera [m]
+T_ee_cam = np.array([[1.000, 0.0, 0.0, -0.0175],
+                     [0.0, 0.9239, -0.3827, -0.0886180],
+                     [0.0, 0.3827, 0.9239, -0.3233572],
+                     [0.0, 0.0, 0.0, 1.0]])
+# --------------------------------------------------------------------------
+
+reg1_pub = rospy.Publisher('reg1_target', Float64MultiArray, queue_size=1)
+reg1_msg = Float64MultiArray()
+reg1_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg2_pub = rospy.Publisher('reg2_target', Float64MultiArray, queue_size=1)
+reg2_msg = Float64MultiArray()
+reg2_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg3_pub = rospy.Publisher('reg3_target', Float64MultiArray, queue_size=1)
+reg3_msg = Float64MultiArray()
+reg3_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+reg4_pub = rospy.Publisher('reg4_target', Float64MultiArray, queue_size=1)
+reg4_msg = Float64MultiArray()
+reg4_msg.data = float('nan')*np.ones([1, 12]).flatten()
+
+key_cmd_pub = rospy.Publisher('keyboard_cmd', Int16, queue_size=1)
+key_cmd_msg = Int16()
+
+rospy.Subscriber('franka_state_controller/franka_states',
+                 FrankaState, ee_callback)
+
+
 def main():
+    # densepose config
+    save_path = '/home/xihan/Myworkspace/lung_ultrasound/image_buffer/incoming.png'
+    load_path = '/home/xihan/Myworkspace/lung_ultrasound/infer_out/incoming_IUV.png'
+    target_u = [60, 100, 60, 100, 60, 100, 60, 100]
+    target_v = [150, 150, 190, 190, 95, 95, 58, 58]
+    inferred = None
+
     # Configure depth and color streams
     pipeline = rs.pipeline()
     config = rs.config()
@@ -133,11 +292,8 @@ def main():
     spat_filter.set_option(rs.option.filter_smooth_alpha, 1)
     spat_filter.set_option(rs.option.filter_smooth_delta, 50)
 
-    # default target in pixel
-    col_vec, row_vec = ROIshape([320, 240])
-
-    # initialize ros node
     rospy.init_node('camera2target', anonymous=True)
+    col_vec, row_vec = ROIshape([320, 240])
     point_x = []
     point_y = []
     point_z = []
@@ -164,41 +320,68 @@ def main():
             # Convert images to numpy arrays
             depth_image = np.asanyarray(filtered.get_data())
             color_image = np.asanyarray(color_frame.get_data())
+            color_image = color_image[:, 80:560]    # crop to square patch
+            depth_image = depth_image[:, 80:560]    # crop to square patch
 
-            # Apply colormap on depth image (image must be converted to 8-bit per pixel first)
-            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(
-                depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            # densepose inferrence
+            cv2.imwrite(save_path, color_image)
+            try:
+                inferred = cv2.imread(load_path)
+            except Exception as e:
+                print('image loading error: '+str(e))
 
-            # get corresponding xyz from uv[-1, -1, -1]
-            if isRecoding:
-                point_x = []
-                point_y = []
-                point_z = []
-                depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
-                for pnt in range(len(row_vec)):
-                    curr_col = round(col_vec[pnt])
-                    curr_row = round(row_vec[pnt])
-                    color_image = cv2.circle(
-                        color_image, (curr_col, curr_row), 2, (30, 90, 30), -1)
-                    depth_pixel = [curr_col, curr_row]
-                    depth_in_met = depth_frame.as_depth_frame().get_distance(curr_col, curr_row)
-                    # deprojection
-                    x = rs.rs2_deproject_pixel_to_point(
-                        depth_intrin, depth_pixel, depth_in_met)[0]
-                    y = rs.rs2_deproject_pixel_to_point(
-                        depth_intrin, depth_pixel, depth_in_met)[1]
-                    z = rs.rs2_deproject_pixel_to_point(
-                        depth_intrin, depth_pixel, depth_in_met)[2]
-                    point_x.append(x)
-                    point_y.append(y)
-                    point_z.append(z)
+            if inferred is not None:
+                IUV_chest = getBodyPart(inferred)
+                for currRegionID in range(len(target_u)):
+                    curr_tar = [target_u[currRegionID], target_v[currRegionID]]
+                    target_pix = divide2region(
+                        IUV_chest, curr_tar[0], curr_tar[1])
+                    if np.isin(-1, target_pix, invert=True):
+                        col_vec, row_vec = ROIshape(target_pix)
+                        # get corresponding xyz from uv[-1, -1, -1]
+                        if isRecoding:
+                            point_x = []
+                            point_y = []
+                            point_z = []
+                            depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
+                            for pnt in range(len(row_vec)):
+                                curr_col = round(col_vec[pnt])
+                                curr_row = round(row_vec[pnt])
+                                color_image = cv2.circle(
+                                    color_image, (curr_col, curr_row), 2, (30, 90, 30), -1)
+                                depth_pixel = [curr_col, curr_row]
+                                depth_in_met = depth_frame.as_depth_frame().get_distance(curr_col, curr_row)
+                                # deprojection
+                                x = rs.rs2_deproject_pixel_to_point(
+                                    depth_intrin, depth_pixel, depth_in_met)[0]
+                                y = rs.rs2_deproject_pixel_to_point(
+                                    depth_intrin, depth_pixel, depth_in_met)[1]
+                                z = rs.rs2_deproject_pixel_to_point(
+                                    depth_intrin, depth_pixel, depth_in_met)[2]
+                                point_x.append(x)
+                                point_y.append(y)
+                                point_z.append(z)
 
-                norm_vec = getSurfaceNormal(point_x, point_y, point_z)
-                point_x.append(my_floor(norm_vec[0], 3))
-                point_y.append(my_floor(norm_vec[1], 3))
-                point_z.append(my_floor(norm_vec[2], 3))
+                            norm_vec = getSurfaceNormal(
+                                point_x, point_y, point_z)
+                            point_x.append(my_floor(norm_vec[0], 3))
+                            point_y.append(my_floor(norm_vec[1], 3))
+                            point_z.append(my_floor(norm_vec[2], 3))
+                            tar_packed = calc_pose(point_x, point_y, point_z)
+                            color_image = drawVector(
+                                color_image, point_x, point_y, point_z)
+                            if currRegionID == 1:
+                                reg1_msg.data = tar_packed
+                            elif currRegionID == 2:
+                                reg2_msg.data = tar_packed
+                            elif currRegionID == 3:
+                                reg3_msg.data = tar_packed
+                            elif currRegionID == 4:
+                                reg4_msg.data = tar_packed
 
-            pub_pos(point_x, point_y, point_z)
+                color_image = createMask(IUV_chest, color_image)
+            else:
+                pass
 
             # Stack both images horizontally
             # images = np.vstack((color_image, depth_colormap))
@@ -218,6 +401,11 @@ def main():
             elif key == ord('e'):
                 isRecoding = False
                 print('freeze data')
+            else:
+                key_cmd_msg.data = key
+
+            pub_key_cmd()
+            pub_pose()
 
     finally:
         # Stop streaming

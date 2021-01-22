@@ -128,13 +128,16 @@ std::array<double, 3> rot2rpy(const std::array<double, 9>& rot_mat) {
   return rpy;
 }
 
-std::array<double, 3> forceControl(const std::array<double, 12>& curr_goal, const double& Fz) {
+std::array<double, 3> forceControl(const std::array<double, 12>& curr_goal,
+                                   const std::array<double, 6>& curr_wrench) {
   // translational component
   std::array<double, 3> P0{{curr_goal[9], curr_goal[10], curr_goal[11]}};
   // approach vector
   std::array<double, 3> Vz{{curr_goal[6], curr_goal[7], curr_goal[8]}};
-  double Fz_desired = 3;
-  double d = 0.08 * (Fz_desired - Fz);  // force control factor
+  double Feef_desired = 3;
+  double Feef = sqrt(curr_wrench[0] * curr_wrench[0] + curr_wrench[1] * curr_wrench[1] +
+                     curr_wrench[2] * curr_wrench[2]);
+  double d = 0.08 * (Feef_desired - Feef);  // force control factor
   // new translational component
   std::array<double, 3> Pz{{P0[0] + Vz[0] * d, P0[1] + Vz[1] * d, P0[2] + Vz[2] * d}};
   return Pz;
@@ -300,7 +303,7 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
 
   // recalculate translation under contact mode
   if (isContact) {
-    auto Pz = forceControl(curr_target, current_wrench[2]);
+    auto Pz = forceControl(curr_target, current_wrench);
     curr_target[9] = Pz[0];
     curr_target[10] = Pz[1];
     curr_target[11] = Pz[2];
@@ -308,7 +311,7 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
 
   command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
 
-  // command[0] = -0.00023;  // uncomment if do swipe
+  // command[0] = -0.00023;  // uncomment if do sweep
   velocity_cartesian_handle_->setCommand(command);
   last_command = command;
   last_pose_ = current_pose_;
