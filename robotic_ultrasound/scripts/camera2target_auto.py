@@ -4,11 +4,10 @@ select target using densepose
 '''
 import numpy as np
 from cv2 import cv2
-from numpy.lib.function_base import _calculate_shapes
+from cv2 import aruco
 from pyrealsense2 import pyrealsense2 as rs
 import rospy
 from franka_msgs.msg import FrankaState
-from rospy import exceptions
 from std_msgs.msg import Float64MultiArray
 from std_msgs.msg import Int16
 
@@ -61,7 +60,34 @@ def createMask(IUV_chest, frame):
     return overlay
 
 
-# ---------------- ROS topic utilities ----------------
+# ---------------- tracking marker ----------------
+def detectMarker(frame):
+    # marker detection
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    aruco_dict = aruco.Dictionary_get(aruco.DICT_6X6_250)
+    parameters = aruco.DetectorParameters_create()
+    corners, ids, _ = aruco.detectMarkers(
+        gray, aruco_dict, parameters=parameters)
+    marker_frame = aruco.drawDetectedMarkers(frame.copy(), corners, ids)
+
+    return marker_frame, corners, ids
+
+
+def trackMarker(corners, ids):
+    num_markers = 8
+    pos = np.zeros((num_markers, 2))
+    for i in range(num_markers):
+        try:
+            marker = corners[np.where(ids == i)[0][0]][0]
+            pos[i, :] = [marker[:, 0].mean(), marker[:, 1].mean()]
+        except:
+            pos[i, :] = [-1, -1]      # if marker is not detected
+        # print("id{} center:".format(i), pos[i-1, 0], pos[i-1, 1])
+
+    return pos
+
+
+# ---------------- ROS topics ----------------
 def ee_callback(msg):
     EE_pos = msg.O_T_EE_d  # inv 4x4 matrix
     global T_O_ee
@@ -93,15 +119,16 @@ def convert2base(T_cam_tar):
     return T_O_tar
 
 
-# ---------------- surface normal utilities ----------------
+# ---------------- surface normal ----------------
 def drawVector(color_image, point_x, point_y, point_z):
-    # 3D to 2D projection
+    # camera intrinsics
     # lab realsense
     camera_matrix = np.array(
         [[610.899, 0.0, 324.496], [0.0, 610.824, 234.984], [0.0, 0.0, 1.0]])
     # Ran's realsense
     # camera_matrix = np.array(
     #     [[610.899, 0.0, 326.496], [0.0, 610.824, 250.984], [0.0, 0.0, 1.0]])
+
     Pc = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]  # world -> camera
     xyz2uv = np.matmul(camera_matrix, Pc)
     # draw surface normal vector on the output frame
@@ -119,7 +146,6 @@ def drawVector(color_image, point_x, point_y, point_z):
                  (int(Pz_uv[0]), int(Pz_uv[1])),
                  (200, 20, 20), 2)
     except Exception as e:
-        # print(e)
         pass
     return color_image
 
@@ -195,6 +221,7 @@ def getSurfaceNormal(point_x, point_y, point_z):
     # averaging + normalization
     norm_vec = norm1+norm2+norm3+norm4+norm5+norm6+norm7+norm8
     norm_vec = norm_vec/np.linalg.norm(norm_vec)
+    # if np.linalg.norm(norm_vec) != 0 else norm_vec
     return norm_vec
 
 
@@ -269,8 +296,10 @@ def main():
     # densepose config
     save_path = '/home/xihan/Myworkspace/lung_ultrasound/image_buffer/incoming.png'
     load_path = '/home/xihan/Myworkspace/lung_ultrasound/infer_out/incoming_IUV.png'
-    target_u = [60, 100, 60, 100, 60, 100, 60, 100]
-    target_v = [150, 150, 190, 190, 95, 95, 58, 58]
+    # target_u = [60, 100, 60, 100, 60, 100, 60, 100]
+    # target_v = [150, 150, 192, 192, 105, 105, 58, 58]
+    target_u = [60, 100, 60, 100]
+    target_v = [165, 165, 115, 115]
     inferred = None
 
     # Configure depth and color streams
@@ -299,7 +328,7 @@ def main():
     point_z = []
 
     isRecoding = False
-    print(" s->start recording \n e->end recording \n q->quit")
+    print(" s->update targets  \n e->freeze targets \n g->go \n q->quit")
     try:
         while True:
             # Wait for a coherent pair of frames: depth and color
@@ -338,6 +367,7 @@ def main():
                         IUV_chest, curr_tar[0], curr_tar[1])
                     if np.isin(-1, target_pix, invert=True):
                         col_vec, row_vec = ROIshape(target_pix)
+
                         # get corresponding xyz from uv[-1, -1, -1]
                         if isRecoding:
                             point_x = []
@@ -345,22 +375,24 @@ def main():
                             point_z = []
                             depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
                             for pnt in range(len(row_vec)):
-                                curr_col = round(col_vec[pnt])
+                                curr_col = round(col_vec[pnt]+80)
                                 curr_row = round(row_vec[pnt])
-                                color_image = cv2.circle(
-                                    color_image, (curr_col, curr_row), 2, (30, 90, 30), -1)
-                                depth_pixel = [curr_col, curr_row]
-                                depth_in_met = depth_frame.as_depth_frame().get_distance(curr_col, curr_row)
-                                # deprojection
-                                x = rs.rs2_deproject_pixel_to_point(
-                                    depth_intrin, depth_pixel, depth_in_met)[0]
-                                y = rs.rs2_deproject_pixel_to_point(
-                                    depth_intrin, depth_pixel, depth_in_met)[1]
-                                z = rs.rs2_deproject_pixel_to_point(
-                                    depth_intrin, depth_pixel, depth_in_met)[2]
-                                point_x.append(x)
-                                point_y.append(y)
-                                point_z.append(z)
+                                # color_image = cv2.circle(
+                                #     color_image, (curr_col-80, curr_row), 2, (30, 90, 30), -1)
+                                try:
+                                    depth_in_met = depth_frame.as_depth_frame().get_distance(curr_col, curr_row)
+                                    # deprojection
+                                    x = rs.rs2_deproject_pixel_to_point(
+                                        depth_intrin, [curr_col, curr_row], depth_in_met)[0]
+                                    y = rs.rs2_deproject_pixel_to_point(
+                                        depth_intrin, [curr_col, curr_row], depth_in_met)[1]
+                                    z = rs.rs2_deproject_pixel_to_point(
+                                        depth_intrin, [curr_col, curr_row], depth_in_met)[2]
+                                    point_x.append(x)
+                                    point_y.append(y)
+                                    point_z.append(z)
+                                except:
+                                    continue
 
                             norm_vec = getSurfaceNormal(
                                 point_x, point_y, point_z)
@@ -368,16 +400,24 @@ def main():
                             point_y.append(my_floor(norm_vec[1], 3))
                             point_z.append(my_floor(norm_vec[2], 3))
                             tar_packed = calc_pose(point_x, point_y, point_z)
-                            color_image = drawVector(
-                                color_image, point_x, point_y, point_z)
-                            if currRegionID == 1:
+                            # color_image = drawVector(
+                            #     color_image, point_x, point_y, point_z)
+                            if currRegionID == 0:
                                 reg1_msg.data = tar_packed
-                            elif currRegionID == 2:
+                            elif currRegionID == 1:
                                 reg2_msg.data = tar_packed
-                            elif currRegionID == 3:
+                            elif currRegionID == 2:
                                 reg3_msg.data = tar_packed
-                            elif currRegionID == 4:
+                            elif currRegionID == 3:
                                 reg4_msg.data = tar_packed
+
+                            cv2.circle(color_image,
+                                       (target_pix[0], target_pix[1]),
+                                       15, (200, 200, 200), -1)
+                            cv2.putText(color_image, str(currRegionID+1),
+                                        (target_pix[0], target_pix[1]),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.5, (1, 100, 1), thickness=2)
 
                 color_image = createMask(IUV_chest, color_image)
             else:

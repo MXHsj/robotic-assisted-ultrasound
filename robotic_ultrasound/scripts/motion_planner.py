@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 '''
-experimenting deprojection in realsense SDK
+motion planner for lung ultrasound
 '''
 import numpy as np
 from numpy.core.numeric import roll
@@ -16,23 +16,19 @@ def eulerAnglesToRotationMatrix(theta):
     # Calculates Rotation Matrix given euler angles.
     R_x = np.array([[1,         0,                  0],
                     [0,         math.cos(theta[0]), -math.sin(theta[0])],
-                    [0,         math.sin(theta[0]), math.cos(theta[0])]
-                    ])
+                    [0,         math.sin(theta[0]), math.cos(theta[0])]])
     R_y = np.array([[math.cos(theta[1]),    0,      math.sin(theta[1])],
                     [0,                     1,      0],
-                    [-math.sin(theta[1]),   0,      math.cos(theta[1])]
-                    ])
+                    [-math.sin(theta[1]),   0,      math.cos(theta[1])]])
     R_z = np.array([[math.cos(theta[2]),    -math.sin(theta[2]),    0],
                     [math.sin(theta[2]),    math.cos(theta[2]),     0],
-                    [0,                     0,                      1]
-                    ])
-    R = np.dot(R_z, np.dot(R_y, R_x))
-
+                    [0,                     0,                      1]])
+    R = np.matmul(R_z, np.matmul(R_y, R_x))
     return R
 
 
 def msg2matrix(raw_msg):
-    # convert 12x1 message array to SE(4) matrix
+    # convert 12x1 message array to SE(3) matrix
     if np.isnan(raw_msg[0]):
         T = None
     else:
@@ -131,12 +127,13 @@ def main():
     isTeleop = False
     isExecute = False
     isFirstContact = True
+    isRelease = False
     T_O_ee_last = T_O_ee
     curr_target = None
     snapshotTime = 0.0
     # RCM control params
-    roll_d = 0.00001
-    pitch_d = 0.00001
+    roll_d = 0.0
+    pitch_d = 0.0
     yaw_d = -math.pi/2
     R_desired = 0.2
     x_obj = 0.22
@@ -145,7 +142,7 @@ def main():
     rospy.init_node('waypoints_generator', anonymous=True)
     target_idx = 0      # should be 0
     num_regions = 3
-    rate = rospy.Rate(25)
+    rate = rospy.Rate(20)
     while not rospy.is_shutdown():
         curr_time = rospy.get_time()
         if key_cmd == ord('t'):
@@ -164,22 +161,19 @@ def main():
             x_d = x_obj
             y_d = R_desired*math.sin(roll_d)
             z_d = z_obj + R_desired*math.cos(roll_d)
+            if key_cmd == ord('j'):
+                roll_d -= 0.05    # rotate CW around x_base
+                # print("x:", np.round(x_d, 4), "y:", np.round(y_d, 4), "z:", np.round(z_d, 4),
+                #       "r:", np.round(roll_d, 4), "p:", np.round(pitch_d, 4), "y:", np.round(yaw_d, 4))
+            if key_cmd == ord('l'):
+                roll_d += 0.05    # rotate CCW around x_base
+                # print("x:", np.round(x_d, 4), "y:", np.round(y_d, 4), "z:", np.round(z_d, 4),
+                #       "r:", np.round(roll_d, 4), "p:", np.round(pitch_d, 4), "y:", np.round(yaw_d, 4))
             Rot = eulerAnglesToRotationMatrix([roll_d, pitch_d, yaw_d])
             curr_target = np.array([[Rot[0, 0], Rot[0, 1], Rot[0, 2], x_d],
                                     [Rot[1, 0], Rot[1, 1], Rot[1, 2], y_d],
                                     [Rot[2, 0], Rot[2, 1], Rot[2, 2], z_d]])
-            # curr_target = np.array([[0, 1, 0, x_d],
-            #                         [-1, 0, 0, y_d],
-            #                         [0, 0, 1, z_d]])
-            # print(curr_target)
-            if key_cmd == ord('j'):
-                roll_d -= 0.08    # rotate CW around x_base
-                print("x:", x_d, "y:", y_d, "z:", z_d,
-                      "r:", roll_d, "p:", pitch_d, "y:", yaw_d)
-            if key_cmd == ord('l'):
-                roll_d += 0.08    # rotate CCW around x_base
-                print("x:", x_d, "y:", y_d, "z:", z_d,
-                      "r:", roll_d, "p:", pitch_d, "y:", yaw_d)
+            print(curr_target)
 
         # sequentially travel to waypoints
         if isExecute and not isTeleop:
@@ -196,9 +190,9 @@ def main():
                 rot_error = T_error[0:3, 0:3].flatten()
 
                 isReachedTrans = True if sum(
-                    [abs(err) < 0.001 for err in trans_error]) == len(trans_error) else False
+                    [abs(err) < 0.002 for err in trans_error]) == len(trans_error) else False
                 isReachedRot = True if sum(
-                    [abs(err) < 0.025 for err in rot_error]) == len(rot_error) else False
+                    [abs(err) < 0.03 for err in rot_error]) == len(rot_error) else False
 
                 # print("trans error: \n", trans_error)
                 # print("rot error: \n", rot_error)
@@ -214,11 +208,16 @@ def main():
                         snapshotTime = curr_time
                     isFirstContact = False
                     # print(curr_time - firstContactTime)
-                    if curr_time - snapshotTime > 20:
+                    if curr_time - snapshotTime > 23:
                         isContact = False
                         isFirstContact = True
-                        target_idx = target_idx + 1 if target_idx < num_regions else target_idx
-                        # print("go to region {}".format(target_idx+1))
+                        isRelease = True
+
+                if isRelease and \
+                        sum([abs(err) < 0.01 for err in trans_error]) == len(trans_error):
+                    target_idx = target_idx + 1 if target_idx < num_regions else target_idx
+                    isRelease = False
+                    print("go to region {}".format(target_idx+1))
 
         pub_pos(curr_target)
         pub_contact_mode(isContact)

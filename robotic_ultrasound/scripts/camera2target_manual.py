@@ -48,8 +48,8 @@ def calc_pose(point_x, point_y, point_z):
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
         # x component
-        xx = 1.0
-        yx = 0.0
+        xx = 0.0         # 0.0
+        yx = -1.0        # -1.0
         zx = -(Vz[1]*(yx-P0[1])+Vz[0]*(xx-P0[0]))/Vz[2]+P0[2]
         Vx = np.subtract([xx, yx, zx], P0)
         Vx = my_floor(Vx/np.linalg.norm(Vx), 3)

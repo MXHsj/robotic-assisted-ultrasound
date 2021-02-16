@@ -2,6 +2,7 @@
 
 import rospy
 import copy
+import math
 import numpy as np
 from std_msgs.msg import Float64MultiArray
 from cv2 import cv2
@@ -9,6 +10,21 @@ from cv2 import cv2
 # T4x4 = np.array([[-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0],
 #                  [-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0, -1.0]])
 T4x4 = -1*np.ones([4, 4])
+
+
+def eulerAnglesToRotationMatrix(theta):
+    # Calculates Rotation Matrix given euler angles.
+    R_x = np.array([[1,         0,                  0],
+                    [0,         math.cos(theta[0]), -math.sin(theta[0])],
+                    [0,         math.sin(theta[0]), math.cos(theta[0])]])
+    R_y = np.array([[math.cos(theta[1]),    0,      math.sin(theta[1])],
+                    [0,                     1,      0],
+                    [-math.sin(theta[1]),   0,      math.cos(theta[1])]])
+    R_z = np.array([[math.cos(theta[2]),    -math.sin(theta[2]),    0],
+                    [math.sin(theta[2]),    math.cos(theta[2]),     0],
+                    [0,                     0,                      1]])
+    R = np.matmul(R_z, np.matmul(R_y, R_x))
+    return R
 
 
 def talker():
@@ -64,14 +80,31 @@ def key_bindings(argument):
     func()
 
 
-console = cv2.imread('RCM_key_inst.png')
-while True:
-    # cv2.namedWindow('user control', cv2.WINDOW_AUTOSIZE)
-    cv2.imshow('user control', console)
-    key = cv2.waitKey(1)
-    # print(key)
-    if key & 0xFF == ord('q') or key == 27:
-        print('quit')
-        break
-    else:
-        key_bindings(key)
+# console = cv2.imread('RCM_key_inst.png')
+# while True:
+#     # cv2.namedWindow('user control', cv2.WINDOW_AUTOSIZE)
+#     cv2.imshow('user control', console)
+#     key = cv2.waitKey(1)
+#     # print(key)
+#     if key & 0xFF == ord('q') or key == 27:
+#         print('quit')
+#         break
+#     else:
+#         key_bindings(key)
+
+roll_d = -math.pi
+pitch_d = 0.0
+yaw_d = -math.pi/2
+R_desired = 0.2
+x_obj = 0.22
+z_obj = 0.12
+
+x_d = x_obj
+y_d = R_desired*math.sin(roll_d)
+z_d = z_obj + R_desired*math.cos(roll_d)
+
+pitch_d += 0.08
+
+Rot = eulerAnglesToRotationMatrix([roll_d, pitch_d, yaw_d])
+
+print(np.round(Rot, 4))
