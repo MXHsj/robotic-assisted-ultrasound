@@ -8,7 +8,7 @@
   - Velocity based PD controller for Franka Emika robot
   - System integration and validation
 
--Usage:
+- Usage:
   - franka_example_controllers
     lower level control of franka robot, modified from https://github.com/frankaemika/franka_ros/tree/kinetic-devel/franka_example_controllers
   - robotic_ultrasound
