@@ -10,8 +10,8 @@
 
 - Usage:
   - franka_example_controllers
-    lower level control of franka robot, modified from https://github.com/frankaemika/franka_ros/tree/kinetic-devel/franka_example_controllers
+    - lower level control of franka robot, modified from https://github.com/frankaemika/franka_ros/tree/kinetic-devel/franka_example_controllers
   - robotic_ultrasound
-    higher level control of franka robot
+    - higher level control of franka robot
   - data_processing
-    MATLAB scripts to process experimental data
+    - MATLAB scripts to process experimental data
