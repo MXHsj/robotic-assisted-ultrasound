@@ -2,6 +2,8 @@
 '''
 select target using densepose
 '''
+import math
+import csv
 import numpy as np
 from cv2 import cv2
 from cv2 import aruco
@@ -142,8 +144,8 @@ def drawVector(color_image, point_x, point_y, point_z):
     P0_uv = [P0_uv[0]/P0_uv[2], P0_uv[1]/P0_uv[2]]
     try:
         cv2.line(color_image,
-                 (int(P0_uv[0]), int(P0_uv[1])),
-                 (int(Pz_uv[0]), int(Pz_uv[1])),
+                 (int(P0_uv[0])-80, int(P0_uv[1])),
+                 (int(Pz_uv[0])-80, int(Pz_uv[1])),
                  (200, 20, 20), 2)
     except Exception as e:
         pass
@@ -156,8 +158,8 @@ def calc_pose(point_x, point_y, point_z):
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
         # x component
-        xx = 1.0
-        yx = 0.0
+        xx = math.cos(math.pi/6)                            # 1.0
+        yx = math.sin(math.pi/6)*math.cos(math.pi/8)        # 0.0
         zx = -(Vz[1]*(yx-P0[1])+Vz[0]*(xx-P0[0]))/Vz[2]+P0[2]
         Vx = np.subtract([xx, yx, zx], P0)
         Vx = my_floor(Vx/np.linalg.norm(Vx), 3)
@@ -229,7 +231,7 @@ def my_floor(a, precision=0):
     return np.round(a - 0.5 * 10**(-precision), precision)
 
 
-def ROIshape(center, edge=12):
+def ROIshape(center, edge=16):
     # square region
     col_vec = [center[0],
                center[0]-edge/2,
@@ -256,10 +258,10 @@ def ROIshape(center, edge=12):
 # ---------------------constant transformations-----------------------------
 # transformation from base to eef
 # (data recorded at home pose, for debug purpose)
-T_O_ee = np.array([[-0.02406, -0.9997, -0.0001, 0.0],
-                   [-0.999, 0.02405, -0.0275, 0.0],
-                   [0.02751, -0.00055, -0.9996, 0.0],
-                   [0.26308, 0.025773, 0.2755, 1.0]]).transpose()
+T_O_ee = np.array([[-0.0117, -0.9996, 0.0239, 0.0],
+                   [-0.9989, 0.01278, 0.0435, 0.0],
+                   [-0.0438, -0.0234, -0.9987, 0.0],
+                   [0.3439, 0.0005, 0.4420, 1.0]]).transpose()
 # T_O_ee = None
 
 # transformation from custom eef to camera [m]
@@ -299,7 +301,8 @@ def main():
     # target_u = [60, 100, 60, 100, 60, 100, 60, 100]
     # target_v = [150, 150, 192, 192, 105, 105, 58, 58]
     target_u = [60, 100, 60, 100]
-    target_v = [165, 165, 115, 115]
+    # target_v = [165, 165, 115, 115]
+    target_v = [155, 155, 105, 105]
     inferred = None
 
     # Configure depth and color streams
@@ -327,6 +330,9 @@ def main():
     point_y = []
     point_z = []
 
+    path2file = '/home/xihan/catkin_ws/src/robotic_ultrasound/scripts/DP2normal.csv'
+    file_out = open(path2file, 'w')
+    writer = csv.writer(file_out)
     isRecoding = False
     print(" s->update targets  \n e->freeze targets \n g->go \n q->quit")
     try:
@@ -394,14 +400,27 @@ def main():
                                 except:
                                     continue
 
+                            cv2.circle(color_image,
+                                       (target_pix[0], target_pix[1]),
+                                       15, (200, 200, 200), -1)
+                            cv2.putText(color_image, str(currRegionID+1),
+                                        (target_pix[0], target_pix[1]),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.5, (1, 100, 1), thickness=2)
+
                             norm_vec = getSurfaceNormal(
                                 point_x, point_y, point_z)
                             point_x.append(my_floor(norm_vec[0], 3))
                             point_y.append(my_floor(norm_vec[1], 3))
                             point_z.append(my_floor(norm_vec[2], 3))
                             tar_packed = calc_pose(point_x, point_y, point_z)
+
+                            # writer.writerow(point_x)
+                            # writer.writerow(point_y)
+                            # writer.writerow(point_z)
                             # color_image = drawVector(
                             #     color_image, point_x, point_y, point_z)
+
                             if currRegionID == 0:
                                 reg1_msg.data = tar_packed
                             elif currRegionID == 1:
@@ -410,14 +429,6 @@ def main():
                                 reg3_msg.data = tar_packed
                             elif currRegionID == 3:
                                 reg4_msg.data = tar_packed
-
-                            cv2.circle(color_image,
-                                       (target_pix[0], target_pix[1]),
-                                       15, (200, 200, 200), -1)
-                            cv2.putText(color_image, str(currRegionID+1),
-                                        (target_pix[0], target_pix[1]),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.5, (1, 100, 1), thickness=2)
 
                 color_image = createMask(IUV_chest, color_image)
             else:
@@ -450,6 +461,7 @@ def main():
     finally:
         # Stop streaming
         pipeline.stop()
+        file_out.close()
         cv2.destroyAllWindows()
 
 

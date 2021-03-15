@@ -102,7 +102,7 @@ def main():
             rot_error = T_error[0:3, 0:3].flatten()
 
             isReachedTrans = True if sum(
-                [abs(err) < 0.0005 for err in trans_error]) == len(trans_error) else False
+                [abs(err) < 0.002 for err in trans_error]) == len(trans_error) else False
             isReachedRot = True if sum(
                 [abs(err) < 0.35 for err in rot_error]) == len(rot_error) else False
             if isReachedRot and isReachedTrans:

@@ -10,7 +10,6 @@
 #include <controller_interface/controller_base.h>
 #include <hardware_interface/hardware_interface.h>
 #include <hardware_interface/joint_command_interface.h>
-// #include <math/YawPitchRoll.h>
 #include <pluginlib/class_list_macros.h>
 #include <ros/ros.h>
 #include <std_msgs/Float64MultiArray.h>
@@ -92,11 +91,15 @@ void CartesianVelocityExampleController::updateStatus() {
     std::cout << std::endl;
   }
   std::cout << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+  std::cout << "eef wrench bias:" << std::endl;
+  std::cout << "Fb_x: " << last_wrench[0] << " Fb_y: " << last_wrench[1]
+            << " Fb_z: " << last_wrench[2] << std::endl;
   std::cout << "current eef wrench:" << std::endl;
   std::cout << "Fx: " << current_wrench[0] << " Fy: " << current_wrench[1]
             << " Fz: " << current_wrench[2] << std::endl;
   std::cout << "last velocity command:" << std::endl;
-  std::cout << "wx: " << last_command[3] << " wy: " << last_command[4] << " wz: " << last_command[5]
+  std::cout << "vx: " << last_command[0] << "vy: " << last_command[1] << "vz: " << last_command[2]
+            << "wx: " << last_command[3] << " wy: " << last_command[4] << " wz: " << last_command[5]
             << std::endl;
   std::cout << "isContact: " << isContact << std::endl;
 }
@@ -121,9 +124,11 @@ std::array<double, 3> rot2rpy(const std::array<double, 9>& rot_mat) {
   } else if (rot_mat[2] > 0) {
     rpy[0] = copysign(rpy[0], -1);
   }
-  // explicitly set sign for pitch
+  // // explicitly set sign for pitch
   if (rot_mat[6] > 0) {
     rpy[1] = copysign(rpy[1], -1);
+  } else if (rot_mat[6] < 0) {
+    rpy[1] = copysign(rpy[1], 1);
   }
   return rpy;
 }
@@ -134,12 +139,14 @@ std::array<double, 3> forceControl(const std::array<double, 12>& curr_goal,
   std::array<double, 3> P0{{curr_goal[9], curr_goal[10], curr_goal[11]}};
   // approach vector
   std::array<double, 3> Vz{{curr_goal[6], curr_goal[7], curr_goal[8]}};
-  double Feef_desired = 3;
-  double Feef = sqrt(curr_wrench[0] * curr_wrench[0] + curr_wrench[1] * curr_wrench[1] +
-                     curr_wrench[2] * curr_wrench[2]);
-  double d = 0.08 * (Feef_desired - Feef);  // force control factor
+  double F_eef_desired = 5;
+  double F_eef = curr_wrench[2];
+  // double F_eef = sqrt(curr_wrench[0] * curr_wrench[0] + curr_wrench[1] * curr_wrench[1] +
+  //                     curr_wrench[2] * curr_wrench[2]);
+  double d = 0.038 * (F_eef_desired - F_eef);  // force control factor 0.05
   // new translational component
   std::array<double, 3> Pz{{P0[0] + Vz[0] * d, P0[1] + Vz[1] * d, P0[2] + Vz[2] * d}};
+  // std::cout << "F_eef:" << F_eef << " d: " << d << std::endl;
   return Pz;
 }
 
@@ -182,16 +189,16 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   // params
   double linear_ramp = 0.00001;   // linear velocity increment
   double angular_ramp = 0.00003;  // angular velocity increment
-  double linear_max = 0.28;       // maximum linear velocity
+  double linear_max = 0.2;        // maximum linear velocity
   double angular_max = 0.02;      // maximum angular velocity
 
   // PD velocity command
-  double desired_v_x = 0.1 * e_v_x;                     // kp = 0.1
-  double desired_v_y = 0.1 * e_v_y;                     // kp = 0.1
-  double desired_v_z = 0.15 * e_v_z + 0.15 * de_v_z;    // kp = 0.2, kd = 0.6
+  double desired_v_x = 0.2 * e_v_x + 0.1 * de_v_x;      // kp = 0.1
+  double desired_v_y = 0.2 * e_v_y + 0.1 * de_v_y;      // kp = 0.1
+  double desired_v_z = 0.08 * e_v_z + 0.65 * de_v_z;    // kp = 0.35, kd = 0.65
   double desired_w_x = 0.0003 * e_w_x + 0.65 * de_w_x;  // kp = 0.0002, kd = 0.8
-  double desired_w_y = 0.0008 * e_w_y + 0.2 * de_w_y;   // kp = 0.0008, kd = 0.2
-  double desired_w_z = 0.0008 * e_w_z + 0.2 * de_w_z;   // kp = 0.0008, kd = 0.2
+  double desired_w_y = 0.0020 * e_w_y + 0.15 * de_w_y;  // kp = 0.0008, kd = 0.2
+  double desired_w_z = 0.0018 * e_w_z + 0.21 * de_w_z;  // kp = 0.0008, kd = 0.2
   auto cmd_vel = prev_vel;
 
   if (std::abs(cmd_vel[0]) <= linear_max) {
@@ -271,6 +278,7 @@ void CartesianVelocityExampleController::starting(const ros::Time& /* time */) {
   last_time = 0.0;
   isContact = false;
   last_command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  // last_wrench = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   isContact_msg =
       nh_.subscribe("isContact", 1, &CartesianVelocityExampleController::isContact_callback, this);
   target_msg = nh_.subscribe("target_pose", 1,
@@ -303,11 +311,19 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
 
   // recalculate translation under contact mode
   if (isContact) {
+    // deal with zero-drifting
+    // current_wrench[0] -= last_wrench[0];
+    // current_wrench[1] -= last_wrench[1];
+    // current_wrench[2] -= last_wrench[2];
+    // new translational target
     auto Pz = forceControl(curr_target, current_wrench);
     curr_target[9] = Pz[0];
     curr_target[10] = Pz[1];
     curr_target[11] = Pz[2];
   }
+  // else {
+  // last_wrench = current_wrench;
+  // }
 
   command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
 
@@ -318,6 +334,7 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
 
   if (current_time - last_time >= 1.0) {  // report current status
     updateStatus();
+    // std::cout << curr_target[9] << " " << curr_target[10] << " " << curr_target[11] << std::endl;
     last_time = current_time;
   }
 }

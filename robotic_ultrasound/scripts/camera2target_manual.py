@@ -6,6 +6,7 @@ import numpy as np
 from cv2 import cv2
 from pyrealsense2 import pyrealsense2 as rs
 import rospy
+import math
 from franka_msgs.msg import FrankaState
 from std_msgs.msg import Float64MultiArray
 from std_msgs.msg import Int16
@@ -48,8 +49,8 @@ def calc_pose(point_x, point_y, point_z):
         P0 = [point_x[0], point_y[0], point_z[0]]
         Vz = [point_x[-1], point_y[-1], point_z[-1]]
         # x component
-        xx = 0.0         # 0.0
-        yx = -1.0        # -1.0
+        xx = math.cos(math.pi/6)                            # 1.0
+        yx = math.sin(math.pi/6)*math.cos(math.pi/8)        # 0.0
         zx = -(Vz[1]*(yx-P0[1])+Vz[0]*(xx-P0[0]))/Vz[2]+P0[2]
         Vx = np.subtract([xx, yx, zx], P0)
         Vx = my_floor(Vx/np.linalg.norm(Vx), 3)

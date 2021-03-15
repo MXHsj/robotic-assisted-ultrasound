@@ -200,23 +200,8 @@ def main():
                 #       "\nrot arrival: ", isReachedRot)
 
                 if isReachedRot and isReachedTrans:
-                    isContact = True
-
-                if isContact:
-                    if isFirstContact:
-                        print("reached region {}".format(target_idx+1))
-                        snapshotTime = curr_time
-                    isFirstContact = False
-                    # print(curr_time - firstContactTime)
-                    if curr_time - snapshotTime > 23:
-                        isContact = False
-                        isFirstContact = True
-                        isRelease = True
-
-                if isRelease and \
-                        sum([abs(err) < 0.01 for err in trans_error]) == len(trans_error):
+                    print("reached region {}".format(target_idx+1))
                     target_idx = target_idx + 1 if target_idx < num_regions else target_idx
-                    isRelease = False
                     print("go to region {}".format(target_idx+1))
 
         pub_pos(curr_target)

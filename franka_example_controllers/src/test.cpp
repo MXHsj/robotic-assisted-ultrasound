@@ -45,8 +45,11 @@ int main() {
   // std::cout << rpy_tar[0] * rad2deg << " " << rpy_tar[1] * rad2deg << " " << rpy_tar[2] * rad2deg
   //           << std::endl;
   Myclass mc1(rpy_home);
-  auto data = mc1.getData();
-  std::cout << data[0] * rad2deg << std::endl;
-  // std::cout << copysign(1.0, 0.0) << std::endl;
+  Myclass mc2(rpy_tar);
+  auto data1 = mc1.getData();
+  auto data2 = mc2.getData();
+  // std::cout << data[0] * rad2deg << std::endl;
+  // std::cout << data1 - data2 << std::endl;
+
   return 0;
 }
