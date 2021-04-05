@@ -1,0 +1,13 @@
+<launch>
+    <arg name="joy_dev" default="/dev/input/js0" />
+    <arg name="cmd_topic" default="cmd_js" />
+
+    <node pkg="joy" type="joy_node" name="joy_node">
+        <param name="dev" value="$(arg joy_dev)" />
+        <param name="deadzone" value="0.0" />
+    </node>
+
+    <node pkg="robotic_ultrasound" type="motion_planner_js.py" name="franka_teleop" output="screen">
+        <remap from="cmd_js" to="$(arg cmd_topic)" />
+    </node>
+</launch>
