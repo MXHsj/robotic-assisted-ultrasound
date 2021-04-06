@@ -77,15 +77,27 @@ class Teleop:
         '''map joystick input to desired eef pose'''
         # TODO: input filtering
         temp = Twist()
-        linxscale = 0.05  # meter
-        linyscale = 0.05
-        if data.buttons[0] == 1:    # control angular
-            temp.angular.x = data.axes[0]
-            temp.angular.y = data.axes[1]
-            temp.angular.z = data.axes[4]
-        else:                       # control linear
-            temp.linear.x = self.curr_slave.linear.x+linxscale*data.axes[1]
-            temp.linear.y = self.curr_slave.linear.y+linyscale*data.axes[0]
+        linxscale = 0.012     # meter
+        linyscale = 0.012
+        angxscale = 0.012     # radius
+        angyscale = 0.01
+        angzscale = 0.01
+        if data.buttons[0] == 1:
+            # desired angular position
+            temp.angular.x = self.curr_slave.angular.x + angxscale*data.axes[0]
+            temp.angular.y = self.curr_slave.angular.y + angyscale*data.axes[1]
+            temp.angular.z = self.curr_slave.angular.z + angzscale*data.axes[4]
+            temp.linear.x = self.curr_slave.linear.x
+            temp.linear.y = self.curr_slave.linear.y
+        elif data.buttons[0] == 0:
+            # desired linear position
+            temp.linear.x = \
+                self.curr_slave.linear.x + linxscale*data.axes[1]
+            temp.linear.y = \
+                self.curr_slave.linear.y - linyscale*data.axes[0]
+            temp.angular.x = self.curr_slave.angular.x
+            temp.angular.y = self.curr_slave.angular.y
+            temp.angular.z = self.curr_slave.angular.z
         return temp
 
     def js_callback(self, js_msg):
@@ -94,22 +106,23 @@ class Teleop:
         cmd = Twist()
         # linear
         cmd.linear.x = \
-            0.005*(self.curr_master.linear.x - self.curr_slave.linear.x) + \
-            0.001*(self.d_master.linear.x - self.d_slave.linear.x)
+            1.4*(self.curr_master.linear.x - self.curr_slave.linear.x) + \
+            0.02*(self.d_master.linear.x - self.d_slave.linear.x)
         cmd.linear.y = \
-            0.005*(self.curr_master.linear.y - self.curr_slave.linear.y) + \
-            0.001*(self.d_master.linear.y - self.d_slave.linear.y)
+            1.4*(self.curr_master.linear.y - self.curr_slave.linear.y) + \
+            0.04*(self.d_master.linear.y - self.d_slave.linear.y)
         # angular
         cmd.angular.x = \
-            0.005*(self.curr_master.angular.x - self.curr_slave.angular.x) + \
-            0.001*(self.d_master.angular.x - self.d_slave.angular.x)
-        cmd.angular.x = \
-            0.005*(self.curr_master.angular.y - self.curr_slave.angular.y) + \
-            0.001*(self.d_master.angular.y - self.d_slave.angular.y)
-        cmd.angular.x = \
-            0.005*(self.curr_master.angular.z - self.curr_slave.angular.z) + \
-            0.001*(self.d_master.angular.z - self.d_slave.angular.z)
+            3.9*(self.curr_master.angular.x - self.curr_slave.angular.x) + \
+            0.002*(self.d_master.angular.x - self.d_slave.angular.x)
+        cmd.angular.y = \
+            3.2*(self.curr_master.angular.y - self.curr_slave.angular.y) + \
+            0.05*(self.d_master.angular.y - self.d_slave.angular.y)
+        cmd.angular.z = \
+            4.6*(self.curr_master.angular.z - self.curr_slave.angular.z) + \
+            0.05*(self.d_master.angular.z - self.d_slave.angular.z)
         self.cmd = cmd
+        # print(self.d_master.angular.x, " ", self.d_slave.angular.x)
 
     def ee_callback(self, ee_msg):
         EE_pos = ee_msg.O_T_EE_d  # inv 4x4 matrix
