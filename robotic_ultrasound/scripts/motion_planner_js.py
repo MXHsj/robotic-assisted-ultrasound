@@ -1,5 +1,10 @@
 #! /usr/bin/env python3
-from logging import setLogRecordFactory
+'''
+Name        : motion_planner_js
+Author      : Xihan Ma
+Version     : 
+Description : control 6-DOF franka end-effector from flight joystick
+'''
 import math
 import copy
 import rospy
@@ -14,9 +19,16 @@ from geometry_msgs.msg import WrenchStamped
 class Teleop:
     def __init__(self):
         rospy.init_node('franka_teleop_joy')
-
-        # self.deadman_button = rospy.get_param('~deadman_button', 0)
+        # joystick buttons/axes
+        self.ax0deadzone = rospy.get_param('~ax0deadzone', 0.06)
+        self.ax1deadzone = rospy.get_param('~deadman_button', 0.06)
+        self.ax4deadzone = rospy.get_param('~deadman_button', 0.095)
         self.cmd = None
+        self.js = Joy()
+        self.js.axes = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.js.buttons = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        # master & slave motion
         self.T_O_ee = np.array([[-0.0117, -0.9996, 0.0239, 0.0],
                                 [-0.9989, 0.01278, 0.0435, 0.0],
                                 [-0.0438, -0.0234, -0.9987, 0.0],
@@ -27,19 +39,26 @@ class Teleop:
         self.last_master = Twist()
         self.d_master = Twist()
         self.d_slave = Twist()
-        self.wrench_slave = Wrench()
-        self.d_force = 5.0  # max contact force [N]
+        # tele operation states
         self.isContact = False
+        self.isAbort = False
+        self.buttonState = False
+        self.buttonStateOld = False
+        self.wrench_slave = Wrench()
+        self.wrench_slave_old = Wrench()
+        self.force_des = 3.0  # max contact force [N]
+        self.force_max = 8.0
 
+        # ROS stufff
         cmd_pub = rospy.Publisher('cmd_js', Twist, queue_size=1)
         rospy.Subscriber("joy", Joy, self.js_callback)
         rospy.Subscriber('franka_state_controller/franka_states',
                          FrankaState, self.ee_callback)
         rospy.Subscriber('/franka_state_controller/F_ext',
                          WrenchStamped, self.force_callback)
+        self.freq = rospy.get_param('~hz', 150)
+        rate = rospy.Rate(self.freq)
 
-        freq = rospy.get_param('~hz', 100)
-        rate = rospy.Rate(freq)
         while not rospy.is_shutdown():
             # update slave state
             self.curr_slave.linear.x = self.T_O_ee[0, 3]
@@ -51,97 +70,185 @@ class Teleop:
             self.curr_slave.angular.x = eul[0]
             self.curr_slave.angular.y = eul[1]
             self.curr_slave.angular.z = eul[2]
-            # calculate slave velocity
+            # slave velocity
             self.d_slave.linear.x = \
-                (self.curr_slave.linear.x-self.last_slave.linear.x)/freq
+                (self.curr_slave.linear.x-self.last_slave.linear.x)/self.freq
             self.d_slave.linear.y = \
-                (self.curr_slave.linear.y-self.last_slave.linear.y)/freq
+                (self.curr_slave.linear.y-self.last_slave.linear.y)/self.freq
             self.d_slave.linear.z = \
-                (self.curr_slave.linear.z-self.last_slave.linear.z)/freq
+                (self.curr_slave.linear.z-self.last_slave.linear.z)/self.freq
             self.d_slave.angular.x = \
-                (self.curr_slave.angular.x-self.last_slave.angular.x)/freq
+                (self.curr_slave.angular.x-self.last_slave.angular.x)/self.freq
             self.d_slave.angular.y = \
-                (self.curr_slave.angular.y-self.last_slave.angular.y)/freq
+                (self.curr_slave.angular.y-self.last_slave.angular.y)/self.freq
             self.d_slave.angular.z = \
-                (self.curr_slave.angular.z-self.last_slave.angular.z)/freq
-            # calculate master velocity
+                (self.curr_slave.angular.z-self.last_slave.angular.z)/self.freq
+            # master velocity
             self.d_master.linear.x = \
-                (self.curr_master.linear.x-self.last_master.linear.x)/freq
+                (self.curr_master.linear.x-self.last_master.linear.x)/self.freq
             self.d_master.linear.y = \
-                (self.curr_master.linear.y-self.last_master.linear.y)/freq
+                (self.curr_master.linear.y-self.last_master.linear.y)/self.freq
             self.d_master.linear.z = \
-                (self.curr_master.linear.z-self.last_master.linear.z)/freq
+                (self.curr_master.linear.z-self.last_master.linear.z)/self.freq
             self.d_master.angular.x = \
-                (self.curr_master.angular.x-self.last_master.angular.x)/freq
+                (self.curr_master.angular.x-self.last_master.angular.x)/self.freq
             self.d_master.angular.y = \
-                (self.curr_master.angular.y-self.last_master.angular.y)/freq
+                (self.curr_master.angular.y-self.last_master.angular.y)/self.freq
             self.d_master.angular.z = \
-                (self.curr_master.angular.z-self.last_master.angular.z)/freq
+                (self.curr_master.angular.z-self.last_master.angular.z)/self.freq
+            # slave total force
+            self.force_sum = math.sqrt(self.wrench_slave.force.x**2 +
+                                       self.wrench_slave.force.y**2 +
+                                       self.wrench_slave.force.z**2)
+            # stopping
+            if self.isAbort:
+                self.cmd = self.stopMotion(self.cmd)
             # publish command
+            if self.js:
+                self.curr_master = self.mapjs2master(self.js)
+            if not self.isAbort:
+                self.cmd = self.PDcontrol(self.js)
             if self.cmd:
                 cmd_pub.publish(self.cmd)
+            # update
             self.last_slave = copy.copy(self.curr_slave)
             self.last_master = copy.copy(self.curr_master)
             rate.sleep()
 
-    def map2motion(self, data):
+    def checkState(self, data):
+        # switch between contact & non-contact mode
+        if data.buttons[10]:
+            if data.axes[0]+data.axes[1]+data.axes[4] < 0.05:
+                self.isContact = not self.isContact
+                print("Contact mode: ", self.isContact)
+            else:
+                print("Only switch contact mode at neutral position")
+
+        # abort if trigger pressed at non-neutral position
+        self.buttonState = data.buttons[0]
+        if self.buttonState is not self.buttonStateOld:
+            if abs(data.axes[0]) > 0.1 or abs(data.axes[1]) > 0.1:
+                print("Abort! move to neutral position!")
+                self.isAbort = True
+        self.buttonStateOld = self.buttonState
+
+        # resume motion by putting js to neutral
+        if self.isAbort:
+            if abs(data.axes[0]) < 0.05 and abs(data.axes[1]) < 0.05:
+                print("Ready to move!")
+                self.isAbort = False
+
+        # check external force on eef
+        if self.force_sum > self.force_max:
+            print("exceeding max external force")
+
+    def mapjs2master(self, data):
         '''map joystick input to desired eef pose'''
         temp = Twist()
-        linxscale = 0.008     # meter
-        linyscale = 0.008
-        angxscale = 0.01      # radius
-        angyscale = 0.01
-        angzscale = 0.01
-        Vz = self.T_O_ee[2, :3]		# approach vector
-        # switch between contact & non-contact mode
-        if data.buttons[4]:
-            self.isContact = not self.isContact
-            print("Contact mode: ", self.isContact)
-        stiffness = 0.01 if self.isContact else 0
-        force_error = self.d_force-self.wrench_slave.force.z
-        if data.buttons[0]:
-            # desired angular position
-            temp.angular.x = self.curr_slave.angular.x + angxscale*data.axes[0]
-            temp.angular.y = self.curr_slave.angular.y + angyscale*data.axes[1]
-            temp.angular.z = self.curr_slave.angular.z + angzscale*data.axes[4]
+        sLin = [0.008, 0.008, 0.006]       # meter [x, y, z]
+        sAng = [0.008, 0.008, 0.01]           # radius [x, y, z]
+        stiff = [6e-4, 6e-4, 7e-4]          # [x, y, z]
+        dampz = 1.8e-6
+        Vz = self.T_O_ee[:3, 2]		# approach vector
+        force_error = self.force_des-self.wrench_slave.force.z
+        force_error_d = \
+            (self.wrench_slave_old.force.z-self.wrench_slave.force.z)*self.freq
+
+        if self.buttonState:
+            # control angular position
+            if self.isContact:
+                temp.angular.x = self.curr_slave.angular.x + \
+                    sAng[0]*data.axes[0]*(self.force_sum < self.force_max)
+                temp.angular.y = self.curr_slave.angular.y + \
+                    sAng[1]*data.axes[1]*(self.force_sum < self.force_max)
+                temp.angular.z = self.curr_slave.angular.z + \
+                    sAng[2]*data.axes[4]*(self.force_sum < self.force_max)
+            else:
+                temp.angular.x = self.curr_slave.angular.x + \
+                    sAng[0]*data.axes[0]
+                temp.angular.y = self.curr_slave.angular.y + \
+                    sAng[1]*data.axes[1]
+                temp.angular.z = self.curr_slave.angular.z + \
+                    sAng[2]*data.axes[4]
             temp.linear.x = self.curr_slave.linear.x
             temp.linear.y = self.curr_slave.linear.y
-        else:
-            # desired linear position
-            temp.linear.x = self.curr_slave.linear.x + \
-                linxscale * data.axes[1] + stiffness*force_error*Vz[0]
-            temp.linear.y = self.curr_slave.linear.y + \
-                (linyscale * data.axes[0] + stiffness*force_error*Vz[1])
-            temp.linear.z = self.curr_slave.linear.z + \
-                stiffness * force_error*Vz[2]
+            temp.linear.z = self.curr_slave.linear.z
+        elif not self.buttonState:
+            # control linear position
+            if self.isContact:
+                temp.linear.x = self.curr_slave.linear.x + \
+                    (sLin[0]/5*data.axes[1] + stiff[0]*force_error*Vz[0])
+                temp.linear.y = self.curr_slave.linear.y - \
+                    (sLin[1]/5*data.axes[0] + stiff[1]*force_error*Vz[1])
+                temp.linear.z = self.curr_slave.linear.z + \
+                    (stiff[2]*force_error+dampz*force_error_d)*Vz[2]
+                # print(temp.linear.z)
+            else:
+                temp.linear.x = self.curr_slave.linear.x + \
+                    (sLin[0]*data.axes[1])
+                temp.linear.y = self.curr_slave.linear.y - \
+                    (sLin[1]*data.axes[0])
+                temp.linear.z = self.curr_slave.linear.z - \
+                    (sLin[2]*data.axes[4])
             temp.angular.x = self.curr_slave.angular.x
             temp.angular.y = self.curr_slave.angular.y
             temp.angular.z = self.curr_slave.angular.z
         return temp
 
-    def js_callback(self, js_msg):
-        '''acceleration command: u = Kp*(Xm-Xs) + Kd*(dXm-dXs)'''
-        self.curr_master = self.map2motion(js_msg)
-        cmd = Twist()
+    def PDcontrol(self, js_msg):
+        '''
+        acceleration command: u = Kp*(Xm-Xs) + Kd*(dXm-dXs)
+        '''
+        # TODO: separate remove residual function
+        u = Twist()
         # linear
-        cmd.linear.x = 0.0 if abs(js_msg.axes[1]) < 0.05 else \
+        u.linear.x = \
             1.3*(self.curr_master.linear.x - self.curr_slave.linear.x) + \
             0.2*(self.d_master.linear.x - self.d_slave.linear.x)
-        cmd.linear.y = 0.0 if abs(js_msg.axes[0]) < 0.05 else \
+        u.linear.y = \
             1.4*(self.curr_master.linear.y - self.curr_slave.linear.y) + \
             0.2*(self.d_master.linear.y - self.d_slave.linear.y)
+        u.linear.z = \
+            1.0*(self.curr_master.linear.z - self.curr_slave.linear.z) + \
+            0.2*(self.d_master.linear.z - self.d_slave.linear.z)
         # angular
-        cmd.angular.x = 0.0 if abs(js_msg.axes[0]) < 0.05 else \
+        u.angular.x = 0.0 if abs(js_msg.axes[0]) < self.ax0deadzone else \
             2.8*(self.curr_master.angular.x - self.curr_slave.angular.x) + \
             0.2*(self.d_master.angular.x - self.d_slave.angular.x)
-        # print(cmd.angular.x)
-        cmd.angular.y = 0.0 if abs(js_msg.axes[1]) < 0.05 else \
+        u.angular.y = 0.0 if abs(js_msg.axes[1]) < self.ax1deadzone else \
             3.0*(self.curr_master.angular.y - self.curr_slave.angular.y) + \
             0.2*(self.d_master.angular.y - self.d_slave.angular.y)
-        cmd.angular.z = 0.0 if abs(js_msg.axes[4]) < 0.05 else \
+        u.angular.z = 0.0 if abs(js_msg.axes[4]) < self.ax4deadzone else \
             4.2*(self.curr_master.angular.z - self.curr_slave.angular.z) + \
             0.4*(self.d_master.angular.z - self.d_slave.angular.z)
-        self.cmd = cmd
+
+        # get rid of small motion
+        u.linear.x = 0.0 if abs(u.linear.x) < 1e-5 else u.linear.x
+        u.linear.y = 0.0 if abs(u.linear.y) < 1e-5 else u.linear.y
+        u.linear.z = 0.0 if abs(u.linear.z) < 1e-5 else u.linear.z
+        return u
+
+    def stopMotion(self, cmd):
+        # gradually decrease acceleration to 0
+        incre = 2e-4
+        tol = 1e-5
+        cmd.linear.x -= math.copysign(incre, cmd.linear.x) \
+            if abs(cmd.linear.x) > tol else 0.0
+        cmd.linear.y -= math.copysign(incre, cmd.linear.y) \
+            if abs(cmd.linear.y) > tol else 0.0
+        cmd.linear.z -= math.copysign(incre, cmd.linear.z) \
+            if abs(cmd.linear.z) > tol else 0.0
+        cmd.angular.x -= math.copysign(incre, cmd.angular.x) \
+            if abs(cmd.angular.x) > tol else 0.0
+        cmd.angular.y -= math.copysign(incre, cmd.angular.y) \
+            if abs(cmd.angular.y) > tol else 0.0
+        cmd.angular.z -= math.copysign(incre, cmd.angular.z) \
+            if abs(cmd.angular.z) > tol else 0.0
+        return cmd
+
+    def js_callback(self, js_msg):
+        self.js = js_msg
+        self.checkState(js_msg)
 
     def ee_callback(self, ee_msg):
         EE_pos = ee_msg.O_T_EE_d  # inv 4x4 matrix
@@ -149,9 +256,13 @@ class Teleop:
                                 EE_pos[12:16]]).transpose()
 
     def force_callback(self, FT_msg):
-        self.wrench_slave.force.x = FT_msg.wrench.force.x
-        self.wrench_slave.force.y = FT_msg.wrench.force.y
-        self.wrench_slave.force.z = FT_msg.wrench.force.z
+        self.wrench_slave_old = self.wrench_slave
+        self.wrench_slave.force.x = 0.0 if FT_msg.wrench.force.x < 0 \
+            else FT_msg.wrench.force.x
+        self.wrench_slave.force.y = 0.0 if FT_msg.wrench.force.y < 0 \
+            else FT_msg.wrench.force.y
+        self.wrench_slave.force.z = 0.0 if FT_msg.wrench.force.z < 0 \
+            else FT_msg.wrench.force.z
 
     def rot2rpy(self, R):
         sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
