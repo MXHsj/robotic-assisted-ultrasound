@@ -69,10 +69,12 @@ void JointPositionExampleController::starting(const ros::Time& /* time */) {
 double kp = 0.0005;
 double max_increment = 0.00015;
 double stop_threshold = 0.0005;
-std::array<double, 7> q_start{{-0.011561764910555723, -0.8889143562347173, 0.07044549291384848,
-                               -2.074199406339411, 0.055746677156236046, 1.1916172333920045,
-                               1.574272930833614}};
-// std::array<double, 7> q_start{{0, -1.0, 0.1, -2.5, 0.1, 1.5, 1.67}};
+// std::array<double, 7> q_start{{-0.011561764910555723, -0.8889143562347173, 0.07044549291384848,
+//                                -2.074199406339411, 0.055746677156236046, 1.1916172333920045,
+//                                1.574272930833614}};
+// std::array<double, 7> q_start{{0, -1.0, 0.1, -2.5, 0.1, 1.5, 1.67}};  // flange x -> base -y
+std::array<double, 7> q_start{{0.0, -1.0, 0.1, -2.5, 0.1, 1.5, 0.0}};  // flange x -> base +x
+// std::array<double, 7> q_start{{0.0, -0.373, 0.0, -2.025, 0.0, 1.635, 0.0}};  // oct end-effector
 
 void JointPositionExampleController::update(const ros::Time& /*time*/,
                                             const ros::Duration& period) {

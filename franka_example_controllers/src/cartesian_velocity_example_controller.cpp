@@ -91,16 +91,14 @@ void CartesianVelocityExampleController::updateStatus() {
     std::cout << std::endl;
   }
   std::cout << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
-  std::cout << "eef wrench bias:" << std::endl;
-  std::cout << "Fb_x: " << last_wrench[0] << " Fb_y: " << last_wrench[1]
-            << " Fb_z: " << last_wrench[2] << std::endl;
   std::cout << "current eef wrench:" << std::endl;
   std::cout << "Fx: " << current_wrench[0] << " Fy: " << current_wrench[1]
-            << " Fz: " << current_wrench[2] << std::endl;
+            << " Fz: " << current_wrench[2] << " Mx: " << current_wrench[3]
+            << " My: " << current_wrench[4] << " Mz: " << current_wrench[5] << std::endl;
   std::cout << "last velocity command:" << std::endl;
-  std::cout << "vx: " << last_command[0] << "vy: " << last_command[1] << "vz: " << last_command[2]
-            << "wx: " << last_command[3] << " wy: " << last_command[4] << " wz: " << last_command[5]
-            << std::endl;
+  std::cout << "vx: " << last_command[0] << " vy: " << last_command[1] << " vz: " << last_command[2]
+            << " wx: " << last_command[3] << " wy: " << last_command[4]
+            << " wz: " << last_command[5] << std::endl;
   std::cout << "isContact: " << isContact << std::endl;
 }
 
@@ -196,9 +194,9 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   double desired_v_x = 0.2 * e_v_x + 0.1 * de_v_x;      // kp = 0.1
   double desired_v_y = 0.2 * e_v_y + 0.1 * de_v_y;      // kp = 0.1
   double desired_v_z = 0.08 * e_v_z + 0.65 * de_v_z;    // kp = 0.35, kd = 0.65
-  double desired_w_x = 0.0003 * e_w_x + 0.65 * de_w_x;  // kp = 0.0002, kd = 0.8
-  double desired_w_y = 0.0020 * e_w_y + 0.15 * de_w_y;  // kp = 0.0008, kd = 0.2
-  double desired_w_z = 0.0018 * e_w_z + 0.21 * de_w_z;  // kp = 0.0008, kd = 0.2
+  double desired_w_x = 0.0003 * e_w_x + 0.64 * de_w_x;  // kp = 0.0002, kd = 0.8
+  double desired_w_y = 0.0016 * e_w_y + 0.15 * de_w_y;  // kp = 0.0008, kd = 0.2
+  double desired_w_z = 0.0018 * e_w_z + 0.15 * de_w_z;  // kp = 0.0008, kd = 0.2
   auto cmd_vel = prev_vel;
 
   if (std::abs(cmd_vel[0]) <= linear_max) {
@@ -278,11 +276,17 @@ void CartesianVelocityExampleController::starting(const ros::Time& /* time */) {
   last_time = 0.0;
   isContact = false;
   last_command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  cmd_vel = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  cmd_js = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   // last_wrench = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   isContact_msg =
       nh_.subscribe("isContact", 1, &CartesianVelocityExampleController::isContact_callback, this);
-  target_msg = nh_.subscribe("target_pose", 1,
-                             &CartesianVelocityExampleController::target_pos_callback, this);
+  target_msg =
+      nh_.subscribe("target_pose", 1, &CartesianVelocityExampleController::cmd_pos_callback, this);
+  cmd_vel_msg =
+      nh_.subscribe("cmd_vel", 1, &CartesianVelocityExampleController::cmd_vel_callback, this);
+  cmd_js_msg =
+      nh_.subscribe("cmd_js", 1, &CartesianVelocityExampleController::cmd_js_callback, this);
 }
 
 void CartesianVelocityExampleController::update(const ros::Time& /* time */,
@@ -307,34 +311,47 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
   current_wrench = velocity_cartesian_handle_->getRobotState().K_F_ext_hat_K;
 
   std::array<double, 6> command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  // std::array<double, 6> command = last_command;
+
   std::array<double, 12> curr_target = target_pose_;
 
   // recalculate translation under contact mode
   if (isContact) {
-    // deal with zero-drifting
-    // current_wrench[0] -= last_wrench[0];
-    // current_wrench[1] -= last_wrench[1];
-    // current_wrench[2] -= last_wrench[2];
-    // new translational target
     auto Pz = forceControl(curr_target, current_wrench);
     curr_target[9] = Pz[0];
     curr_target[10] = Pz[1];
     curr_target[11] = Pz[2];
   }
-  // else {
-  // last_wrench = current_wrench;
-  // }
 
-  command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
+  /* if sending desired eef pose */
+  // command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
 
-  // command[0] = -0.00023;  // uncomment if do sweep
+  /* if sending desired eef velocity */
+  // command = cmd_vel;
+
+  /* if sending desired eef acceleration */
+  for (size_t i = 0; i < 6; i++) {
+    if (std::abs(cmd_js[i]) > 0.04) {
+      ROS_WARN_STREAM("TOO LARGE ACCELERATION, COMMAND REJECTED!");
+      break;
+    }
+    if ((std::abs(current_wrench[0]) + std::abs(current_wrench[0]) + std::abs(current_wrench[0])) >
+        20.0) {
+      ROS_WARN_STREAM("TOO LARGE WRENCH, COMMAND REJECTED!");
+      break;
+    }
+    if (std::abs(command[i] + cmd_js[i]) > 0.05) {
+      ROS_WARN_STREAM("TOO LARGE VELOCITY, COMMAND REJECTED!");
+    }
+    command[i] += cmd_js[i];
+  }
+
   velocity_cartesian_handle_->setCommand(command);
   last_command = command;
   last_pose_ = current_pose_;
 
   if (current_time - last_time >= 1.0) {  // report current status
     updateStatus();
-    // std::cout << curr_target[9] << " " << curr_target[10] << " " << curr_target[11] << std::endl;
     last_time = current_time;
   }
 }

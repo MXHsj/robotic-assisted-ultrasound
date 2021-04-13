@@ -14,8 +14,6 @@
 
 #include <franka_hw/franka_cartesian_command_interface.h>
 
-#include <std_msgs/Float64MultiArray.h>
-
 namespace franka_example_controllers {
 
 class CartesianPoseExampleController
@@ -26,28 +24,15 @@ class CartesianPoseExampleController
   void starting(const ros::Time&) override;
   void update(const ros::Time&, const ros::Duration& period) override;
 
-  void target_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg);
-  void entry_pos_callback(const std_msgs::Float64MultiArray::ConstPtr& msg);
-
  private:
   franka_hw::FrankaPoseCartesianInterface* cartesian_pose_interface_;
   std::unique_ptr<franka_hw::FrankaCartesianPoseHandle> cartesian_pose_handle_;
   ros::Duration elapsed_time_;
-  // robot states
   std::array<double, 16> initial_pose_{};
-  std::array<double, 16> current_pose_{};
-  std::array<double, 16> last_pose_{};
-  std::array<double, 12> target_pose_{};  // column major
-  std::array<double, 12> entry_pose_{};   // column major
-  // node handle & topics
-  ros::NodeHandle nh_;
-  ros::Subscriber target_msg;  // subscriber to eef target pose
-  ros::Subscriber entry_msg;   // subscriber to eef entry pose
-  // initial conditions
-  double current_time = 0.0;
-  double last_time = 0.0;
-  bool isReachedWp = false;
-  bool isReachedTar = false;
+  std::array<double, 16> destination_pose{};
+  std::array<double, 16> current_pose{};
+  double counter = 0.0;
 };
 
 }  // namespace franka_example_controllers
+
