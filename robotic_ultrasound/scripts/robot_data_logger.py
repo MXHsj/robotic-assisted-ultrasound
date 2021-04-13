@@ -32,7 +32,9 @@ def ee_callback(msg):
 
 
 def force_callback(msg):
-    global Fz
+    global Fx, Fy, Fz
+    Fx = msg.wrench.force.x
+    Fy = msg.wrench.force.y
     Fz = msg.wrench.force.z
 
 
@@ -103,19 +105,22 @@ key_cmd = -1
 
 def main():
     rospy.init_node('robot_data_logger', anonymous=True)
-    path2file = '/home/xihan/catkin_ws/src/robotic_ultrasound/scripts/robot_data_log.csv'
+    path2file = '/home/xihan/catkin_ws/src/robotic_ultrasound/data_log/robot_data_log.csv'
     file_out = open(path2file, 'w')
     writer = csv.writer(file_out)
-    writer.writerow(T_O_reg1.flatten())
-    writer.writerow(T_O_reg2.flatten())
-    writer.writerow(T_O_reg3.flatten())
-    writer.writerow(T_O_reg4.flatten())
-    rate = rospy.Rate(10)
+    # writer.writerow(T_O_reg1.flatten())
+    # writer.writerow(T_O_reg2.flatten())
+    # writer.writerow(T_O_reg3.flatten())
+    # writer.writerow(T_O_reg4.flatten())
+    freq = 1
+    rate = rospy.Rate(freq)
     print('start recording.')
     while not rospy.is_shutdown():
         data = T_O_ee.flatten()
+        data = np.append(data, Fx)
+        data = np.append(data, Fy)
         data = np.append(data, Fz)
-        data = np.append(data, isContact)
+        # data = np.append(data, isContact)
         writer.writerow(data)
         rate.sleep()
     print('\nend recording.')

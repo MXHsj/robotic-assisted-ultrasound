@@ -34,16 +34,17 @@ class Teleop:
                                 [-0.0438, -0.0234, -0.9987, 0.0],
                                 [0.3439, 0.0005, 0.4420, 1.0]]).transpose()
         self.curr_slave = Twist()
-        self.curr_master = Twist()
         self.last_slave = Twist()
+        self.curr_master = Twist()
         self.last_master = Twist()
-        self.d_master = Twist()
         self.d_slave = Twist()
+        self.d_master = Twist()
         # tele operation states
-        self.isContact = False
-        self.isAbort = False
-        self.buttonState = False
-        self.buttonStateOld = False
+        self.isContact = False          # automatic force compliant
+        self.isAbort = False            # gradual stopping motion
+        self.isEstop = False         # emergency-stop
+        self.triggerState = False       # tranlation-rotation switch
+        self.triggerStateOld = False
         self.wrench_slave = Wrench()
         self.wrench_slave_old = Wrench()
         self.force_des = 3.0  # max contact force [N]
@@ -56,7 +57,7 @@ class Teleop:
                          FrankaState, self.ee_callback)
         rospy.Subscriber('/franka_state_controller/F_ext',
                          WrenchStamped, self.force_callback)
-        self.freq = rospy.get_param('~hz', 150)
+        self.freq = rospy.get_param('~hz', 20)
         rate = rospy.Rate(self.freq)
 
         while not rospy.is_shutdown():
@@ -72,47 +73,46 @@ class Teleop:
             self.curr_slave.angular.z = eul[2]
             # slave velocity
             self.d_slave.linear.x = \
-                (self.curr_slave.linear.x-self.last_slave.linear.x)/self.freq
+                (self.curr_slave.linear.x-self.last_slave.linear.x)*self.freq
             self.d_slave.linear.y = \
-                (self.curr_slave.linear.y-self.last_slave.linear.y)/self.freq
+                (self.curr_slave.linear.y-self.last_slave.linear.y)*self.freq
             self.d_slave.linear.z = \
-                (self.curr_slave.linear.z-self.last_slave.linear.z)/self.freq
+                (self.curr_slave.linear.z-self.last_slave.linear.z)*self.freq
             self.d_slave.angular.x = \
-                (self.curr_slave.angular.x-self.last_slave.angular.x)/self.freq
+                (self.curr_slave.angular.x-self.last_slave.angular.x)*self.freq
             self.d_slave.angular.y = \
-                (self.curr_slave.angular.y-self.last_slave.angular.y)/self.freq
+                (self.curr_slave.angular.y-self.last_slave.angular.y)*self.freq
             self.d_slave.angular.z = \
-                (self.curr_slave.angular.z-self.last_slave.angular.z)/self.freq
+                (self.curr_slave.angular.z-self.last_slave.angular.z)*self.freq
             # master velocity
             self.d_master.linear.x = \
-                (self.curr_master.linear.x-self.last_master.linear.x)/self.freq
+                (self.curr_master.linear.x-self.last_master.linear.x)*self.freq
             self.d_master.linear.y = \
-                (self.curr_master.linear.y-self.last_master.linear.y)/self.freq
+                (self.curr_master.linear.y-self.last_master.linear.y)*self.freq
             self.d_master.linear.z = \
-                (self.curr_master.linear.z-self.last_master.linear.z)/self.freq
+                (self.curr_master.linear.z-self.last_master.linear.z)*self.freq
             self.d_master.angular.x = \
-                (self.curr_master.angular.x-self.last_master.angular.x)/self.freq
+                (self.curr_master.angular.x-self.last_master.angular.x)*self.freq
             self.d_master.angular.y = \
-                (self.curr_master.angular.y-self.last_master.angular.y)/self.freq
+                (self.curr_master.angular.y-self.last_master.angular.y)*self.freq
             self.d_master.angular.z = \
-                (self.curr_master.angular.z-self.last_master.angular.z)/self.freq
-            # slave total force
+                (self.curr_master.angular.z-self.last_master.angular.z)*self.freq
+            # total force on end-effector
             self.force_sum = math.sqrt(self.wrench_slave.force.x**2 +
                                        self.wrench_slave.force.y**2 +
                                        self.wrench_slave.force.z**2)
-            # stopping
-            if self.isAbort:
-                self.cmd = self.stopMotion(self.cmd)
             # publish command
-            if self.js:
-                self.curr_master = self.mapjs2master(self.js)
-            if not self.isAbort:
+            # if self.js:
+            self.checkState(self.js)
+            self.curr_master = self.mapjs2master(self.js)
+            if self.isAbort or self.isEstop:
+                self.cmd = self.stopMotion(self.cmd)
+            else:
                 self.cmd = self.PDcontrol(self.js)
             if self.cmd:
                 cmd_pub.publish(self.cmd)
-            # update
-            self.last_slave = copy.copy(self.curr_slave)
-            self.last_master = copy.copy(self.curr_master)
+            self.last_slave = copy.deepcopy(self.curr_slave)
+            self.last_master = copy.deepcopy(self.curr_master)
             rate.sleep()
 
     def checkState(self, data):
@@ -124,13 +124,16 @@ class Teleop:
             else:
                 print("Only switch contact mode at neutral position")
 
+        # abort if e-stop pressed
+        self.isEstop = data.buttons[1]
+
         # abort if trigger pressed at non-neutral position
-        self.buttonState = data.buttons[0]
-        if self.buttonState is not self.buttonStateOld:
+        self.triggerState = data.buttons[0]
+        if self.triggerState is not self.triggerStateOld:
             if abs(data.axes[0]) > 0.1 or abs(data.axes[1]) > 0.1:
                 print("Abort! move to neutral position!")
                 self.isAbort = True
-        self.buttonStateOld = self.buttonState
+        self.triggerStateOld = self.triggerState
 
         # resume motion by putting js to neutral
         if self.isAbort:
@@ -145,16 +148,16 @@ class Teleop:
     def mapjs2master(self, data):
         '''map joystick input to desired eef pose'''
         temp = Twist()
-        sLin = [0.008, 0.008, 0.006]       # meter [x, y, z]
-        sAng = [0.008, 0.008, 0.01]           # radius [x, y, z]
-        stiff = [6e-4, 6e-4, 7e-4]          # [x, y, z]
+        sLin = [0.008, 0.008, 0.006]   # [x, y, z] [0.008, 0.008, 0.006]
+        sAng = [0.008, 0.008, 0.008]   # [x, y, z] [0.008, 0.008, 0.01]
+        stiff = [6e-4, 6e-4, 7e-4]    # [x, y, z] [6e-4, 6e-4, 7e-4]
         dampz = 1.8e-6
         Vz = self.T_O_ee[:3, 2]		# approach vector
         force_error = self.force_des-self.wrench_slave.force.z
         force_error_d = \
             (self.wrench_slave_old.force.z-self.wrench_slave.force.z)*self.freq
 
-        if self.buttonState:
+        if self.triggerState:
             # control angular position
             if self.isContact:
                 temp.angular.x = self.curr_slave.angular.x + \
@@ -173,7 +176,7 @@ class Teleop:
             temp.linear.x = self.curr_slave.linear.x
             temp.linear.y = self.curr_slave.linear.y
             temp.linear.z = self.curr_slave.linear.z
-        elif not self.buttonState:
+        elif not self.triggerState:
             # control linear position
             if self.isContact:
                 temp.linear.x = self.curr_slave.linear.x + \
@@ -202,30 +205,37 @@ class Teleop:
         # TODO: separate remove residual function
         u = Twist()
         # linear
+        # kp = 1.3, kd = 0.2
         u.linear.x = \
-            1.3*(self.curr_master.linear.x - self.curr_slave.linear.x) + \
-            0.2*(self.d_master.linear.x - self.d_slave.linear.x)
+            1.5*(self.curr_master.linear.x - self.curr_slave.linear.x) \
+            # + 0.2*(self.d_master.linear.x - self.d_slave.linear.x)
+        # kp = 1.4, kd = 0.2
         u.linear.y = \
-            1.4*(self.curr_master.linear.y - self.curr_slave.linear.y) + \
-            0.2*(self.d_master.linear.y - self.d_slave.linear.y)
+            1.5*(self.curr_master.linear.y - self.curr_slave.linear.y) \
+            # + 0.2*(self.d_master.linear.y - self.d_slave.linear.y)
+        # kp = 1.0, kd = 0.2
         u.linear.z = \
-            1.0*(self.curr_master.linear.z - self.curr_slave.linear.z) + \
-            0.2*(self.d_master.linear.z - self.d_slave.linear.z)
+            1.5*(self.curr_master.linear.z - self.curr_slave.linear.z) \
+            # + 0.2*(self.d_master.linear.z - self.d_slave.linear.z)
         # angular
+        # kp = 2.8, kd = 0.2
         u.angular.x = 0.0 if abs(js_msg.axes[0]) < self.ax0deadzone else \
-            2.8*(self.curr_master.angular.x - self.curr_slave.angular.x) + \
-            0.2*(self.d_master.angular.x - self.d_slave.angular.x)
+            2.8*(self.curr_master.angular.x - self.curr_slave.angular.x) \
+            # + 0.2*(self.d_master.angular.x - self.d_slave.angular.x)
+        # print(u.angular.x)
+        # kp = 3.0, kd = 0.2
         u.angular.y = 0.0 if abs(js_msg.axes[1]) < self.ax1deadzone else \
-            3.0*(self.curr_master.angular.y - self.curr_slave.angular.y) + \
-            0.2*(self.d_master.angular.y - self.d_slave.angular.y)
+            3.0*(self.curr_master.angular.y - self.curr_slave.angular.y) \
+            # + 0.2*(self.d_master.angular.y - self.d_slave.angular.y)
+        # kp = 4.2, kd = 0.4
         u.angular.z = 0.0 if abs(js_msg.axes[4]) < self.ax4deadzone else \
-            4.2*(self.curr_master.angular.z - self.curr_slave.angular.z) + \
-            0.4*(self.d_master.angular.z - self.d_slave.angular.z)
+            4.2*(self.curr_master.angular.z - self.curr_slave.angular.z) \
+            # + 0.4*(self.d_master.angular.z - self.d_slave.angular.z)
 
         # get rid of small motion
-        u.linear.x = 0.0 if abs(u.linear.x) < 1e-5 else u.linear.x
-        u.linear.y = 0.0 if abs(u.linear.y) < 1e-5 else u.linear.y
-        u.linear.z = 0.0 if abs(u.linear.z) < 1e-5 else u.linear.z
+        u.linear.x = 0.0 if abs(u.linear.x) < 1e-7 else u.linear.x
+        u.linear.y = 0.0 if abs(u.linear.y) < 1e-7 else u.linear.y
+        u.linear.z = 0.0 if abs(u.linear.z) < 1e-7 else u.linear.z
         return u
 
     def stopMotion(self, cmd):
@@ -248,7 +258,6 @@ class Teleop:
 
     def js_callback(self, js_msg):
         self.js = js_msg
-        self.checkState(js_msg)
 
     def ee_callback(self, ee_msg):
         EE_pos = ee_msg.O_T_EE_d  # inv 4x4 matrix
