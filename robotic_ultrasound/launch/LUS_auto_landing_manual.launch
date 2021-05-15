@@ -1,5 +1,6 @@
+<?xml version="1.0" ?>
 <launch>
-    <arg name="joy_dev" default="/dev/input/js0" />
+<arg name="joy_dev" default="/dev/input/js0" />
     <arg name="cmd_topic" default="cmd_js" />
 
     <node pkg="joy" type="joy_node" name="joy_node">
@@ -13,4 +14,5 @@
         <param name="ax1deadzone" value="0.05" />
         <param name="ax4deadzone" value="0.08ss" />
     </node>
+<node pkg="robotic_ultrasound" type="LUS_auto_landing_manual.py" name="LUS_auto_landing_manual" output="screen" />
 </launch>

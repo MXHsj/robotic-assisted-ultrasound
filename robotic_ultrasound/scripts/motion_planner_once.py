@@ -77,7 +77,7 @@ tar_sub = rospy.Subscriber(
     'cam_target', Float64MultiArray, cam_tar_callback)
 ee_sub = rospy.Subscriber(
     "franka_state_controller/franka_states", FrankaState, ee_callback)
-tar_pub = rospy.Publisher('target_pose', Float64MultiArray, queue_size=1)
+tar_pub = rospy.Publisher('franka_cmd_pos', Float64MultiArray, queue_size=1)
 op_pub = rospy.Publisher('isContact', Bool, queue_size=1)
 
 
