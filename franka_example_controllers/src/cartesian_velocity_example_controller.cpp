@@ -117,27 +117,29 @@ std::array<double, 3> rot2rpy(const std::array<double, 9>& rot_mat) {
     rpy[2] = 0;
   }
   // explicitly set sign for roll
-  if (rot_mat[2] < 0) {
-    rpy[0] = copysign(rpy[0], 1);
-  } else if (rot_mat[2] > 0) {
-    rpy[0] = copysign(rpy[0], -1);
-  }
-  // // explicitly set sign for pitch
-  if (rot_mat[6] > 0) {
-    rpy[1] = copysign(rpy[1], -1);
-  } else if (rot_mat[6] < 0) {
-    rpy[1] = copysign(rpy[1], 1);
-  }
+  // if (rot_mat[2] < 0) {
+  //   rpy[0] = copysign(rpy[0], 1);
+  // } else if (rot_mat[2] > 0) {
+  //   rpy[0] = copysign(rpy[0], -1);
+  // }
+  // // // explicitly set sign for pitch
+  // if (rot_mat[6] > 0) {
+  //   rpy[1] = copysign(rpy[1], -1);
+  // } else if (rot_mat[6] < 0) {
+  //   rpy[1] = copysign(rpy[1], 1);
+  // }
+  rpy[0] = (rpy[0] < 0) ? rpy[0] + 6.28 : rpy[0];
   return rpy;
 }
 
 std::array<double, 3> forceControl(const std::array<double, 12>& curr_goal,
-                                   const std::array<double, 6>& curr_wrench) {
+                                   const std::array<double, 6>& curr_wrench,
+                                   float d_Fz) {
   // translational component
   std::array<double, 3> P0{{curr_goal[9], curr_goal[10], curr_goal[11]}};
   // approach vector
   std::array<double, 3> Vz{{curr_goal[6], curr_goal[7], curr_goal[8]}};
-  double F_eef_desired = 5;
+  double F_eef_desired = d_Fz;
   double F_eef = curr_wrench[2];
   // double F_eef = sqrt(curr_wrench[0] * curr_wrench[0] + curr_wrench[1] * curr_wrench[1] +
   //                     curr_wrench[2] * curr_wrench[2]);
@@ -185,18 +187,18 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
   double de_w_z = prev_vel[5] - (curr_rpy[2] - prev_rpy[2]) / dt.toSec();
 
   // params
-  double linear_ramp = 0.00001;   // linear velocity increment
-  double angular_ramp = 0.00003;  // angular velocity increment
+  double linear_ramp = 0.00002;   // linear velocity increment
+  double angular_ramp = 0.00002;  // angular velocity increment
   double linear_max = 0.2;        // maximum linear velocity
   double angular_max = 0.02;      // maximum angular velocity
 
   // PD velocity command
-  double desired_v_x = 0.2 * e_v_x + 0.1 * de_v_x;      // kp = 0.1
-  double desired_v_y = 0.2 * e_v_y + 0.1 * de_v_y;      // kp = 0.1
+  double desired_v_x = 0.1 * e_v_x + 0.1 * de_v_x;      // kp = 0.1
+  double desired_v_y = 0.1 * e_v_y + 0.1 * de_v_y;      // kp = 0.1
   double desired_v_z = 0.08 * e_v_z + 0.65 * de_v_z;    // kp = 0.35, kd = 0.65
   double desired_w_x = 0.0003 * e_w_x + 0.64 * de_w_x;  // kp = 0.0002, kd = 0.8
-  double desired_w_y = 0.0016 * e_w_y + 0.15 * de_w_y;  // kp = 0.0008, kd = 0.2
-  double desired_w_z = 0.0018 * e_w_z + 0.15 * de_w_z;  // kp = 0.0008, kd = 0.2
+  double desired_w_y = 0.0015 * e_w_y + 0.2 * de_w_y;   // kp = 0.0008, kd = 0.2
+  double desired_w_z = 0.0015 * e_w_z + 0.2 * de_w_z;   // kp = 0.0008, kd = 0.2
   auto cmd_vel = prev_vel;
 
   if (std::abs(cmd_vel[0]) <= linear_max) {
@@ -247,15 +249,17 @@ std::array<double, 6> calcNewVel(const std::array<double, 12>& curr_goal,
     cmd_vel[5] += 0.0;
   }
 
-  for (int vel_idx = 3; vel_idx <= 5; vel_idx++) {
-    cmd_vel[vel_idx] = (std::abs(cmd_vel[vel_idx]) < angular_max)
-                           ? cmd_vel[vel_idx]
-                           : copysign(angular_max, cmd_vel[vel_idx]);
-  }
+  // for (int vel_idx = 3; vel_idx <= 5; vel_idx++) {
+  //   cmd_vel[vel_idx] = (std::abs(cmd_vel[vel_idx]) < angular_max)
+  //                          ? cmd_vel[vel_idx]
+  //                          : copysign(angular_max, cmd_vel[vel_idx]);
+  // }
 
   // std::cout << "--------------------------INFO-----------------------------" << std::endl;
   // std::cout << "e_v_x:" << e_v_x << " e_v_y:" << e_v_y << " e_v_z:" << e_v_z << std::endl;
   // std::cout << "e_w_x:" << e_w_x << " e_w_y:" << e_w_y << " e_w_z:" << e_w_z << std::endl;
+  // std::cout << "de_v_x:" << de_v_x << " de_v_y:" << de_v_y << " de_v_z:" << de_v_z << std::endl;
+  // std::cout << "de_w_x:" << de_w_x << " de_w_y:" << de_w_y << " de_w_z:" << de_w_z << std::endl;
   // std::cout << "v_x:" << cmd_vel[0] << "\tv_y:" << cmd_vel[1] << "\tv_z:" << cmd_vel[2]
   //           << std::endl;
   // std::cout << "w_x:" << cmd_vel[3] << "\tw_y:" << cmd_vel[4] << "\tw_z:" << cmd_vel[5]
@@ -277,16 +281,18 @@ void CartesianVelocityExampleController::starting(const ros::Time& /* time */) {
   isContact = false;
   last_command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   cmd_vel = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-  cmd_js = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-  // last_wrench = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  cmd_acc = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+  last_cmd_acc = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   isContact_msg =
       nh_.subscribe("isContact", 1, &CartesianVelocityExampleController::isContact_callback, this);
-  target_msg =
-      nh_.subscribe("target_pose", 1, &CartesianVelocityExampleController::cmd_pos_callback, this);
-  cmd_vel_msg =
-      nh_.subscribe("cmd_vel", 1, &CartesianVelocityExampleController::cmd_vel_callback, this);
-  cmd_js_msg =
-      nh_.subscribe("cmd_js", 1, &CartesianVelocityExampleController::cmd_js_callback, this);
+  cmd_pos_msg = nh_.subscribe("franka_cmd_pos", 1,
+                              &CartesianVelocityExampleController::cmd_pos_callback, this);
+  cmd_vel_msg = nh_.subscribe("franka_cmd_vel", 1,
+                              &CartesianVelocityExampleController::cmd_vel_callback, this);
+  cmd_acc_msg = nh_.subscribe("franka_cmd_acc", 1,
+                              &CartesianVelocityExampleController::cmd_acc_callback, this);
+  // cmd_acc_msg =
+  //     nh_.subscribe("cmd_js", 1, &CartesianVelocityExampleController::cmd_acc_callback, this);
 }
 
 void CartesianVelocityExampleController::update(const ros::Time& /* time */,
@@ -309,49 +315,68 @@ void CartesianVelocityExampleController::update(const ros::Time& /* time */,
 
   current_pose_ = velocity_cartesian_handle_->getRobotState().O_T_EE_d;
   current_wrench = velocity_cartesian_handle_->getRobotState().K_F_ext_hat_K;
+  double desired_Fz = 1.0;  // [N]
 
   std::array<double, 6> command = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
   // std::array<double, 6> command = last_command;
-
   std::array<double, 12> curr_target = target_pose_;
 
   // recalculate translation under contact mode
-  if (isContact) {
-    auto Pz = forceControl(curr_target, current_wrench);
-    curr_target[9] = Pz[0];
-    curr_target[10] = Pz[1];
-    curr_target[11] = Pz[2];
+  // if (isContact) {
+  //   auto Pz = forceControl(curr_target, current_wrench, desired_Fz);
+  //   curr_target[9] = Pz[0];
+  //   curr_target[10] = Pz[1];
+  //   curr_target[11] = Pz[2];
+  // }
+
+  // controls
+  if (ctrl_mode == 'p') {
+    /* if sending desired eef pose */
+    command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
+  } else if (ctrl_mode == 'v') {
+    /* if sending desired eef velocity */
+    command = cmd_vel;
+  } else if (ctrl_mode == 'a') {
+    /* if sending desired eef acceleration */
+    for (size_t i = 0; i < 6; i++) {
+      command[i] += cmd_acc[i];
+    }
   }
 
-  /* if sending desired eef pose */
-  // command = calcNewVel(curr_target, current_pose_, last_pose_, last_command, period);
-
-  /* if sending desired eef velocity */
-  // command = cmd_vel;
-
-  /* if sending desired eef acceleration */
+  // safety check
+  auto command2send = command;
   for (size_t i = 0; i < 6; i++) {
-    if (std::abs(cmd_js[i]) > 0.04) {
+    if (std::abs(cmd_acc[i] - last_cmd_acc[i]) > 0.03) {
+      ROS_WARN_STREAM("TOO LARGE JERK, COMMAND REJECTED!");
+      command2send = last_command;
+      break;
+    }
+    if (std::abs((command2send[i] - last_command[i]) * period.toSec()) > 0.01) {
       ROS_WARN_STREAM("TOO LARGE ACCELERATION, COMMAND REJECTED!");
+      command2send = last_command;
       break;
     }
     if ((std::abs(current_wrench[0]) + std::abs(current_wrench[0]) + std::abs(current_wrench[0])) >
-        20.0) {
+        30.0) {
       ROS_WARN_STREAM("TOO LARGE WRENCH, COMMAND REJECTED!");
+      command2send = last_command;
       break;
     }
-    if (std::abs(command[i] + cmd_js[i]) > 0.05) {
+    if (std::abs(command2send[i]) > 0.06) {
       ROS_WARN_STREAM("TOO LARGE VELOCITY, COMMAND REJECTED!");
+      command2send = last_command;
+      break;
     }
-    command[i] += cmd_js[i];
   }
+  velocity_cartesian_handle_->setCommand(command2send);
 
-  velocity_cartesian_handle_->setCommand(command);
-  last_command = command;
+  last_cmd_acc = cmd_acc;
+  last_command = command2send;
   last_pose_ = current_pose_;
 
   if (current_time - last_time >= 1.0) {  // report current status
     updateStatus();
+    std::cout << "ctrl_mode: " << ctrl_mode << std::endl;
     last_time = current_time;
   }
 }
