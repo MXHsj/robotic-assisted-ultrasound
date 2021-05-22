@@ -1,9 +1,8 @@
-# Autonomous Robotic Lung Ultrasound
-
 ## DensePose Installation Guide
 - author: Xihan Ma
 - date: 05-21-2021
 - reference: [DensePose Colab notebook](https://colab.research.google.com/github/tugstugi/dl-colab-notebooks/blob/master/notebooks/DensePose.ipynb)
+---
 
 ### Prerequisites
 1. Ubuntu 18.04
