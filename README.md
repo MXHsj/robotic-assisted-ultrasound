@@ -10,5 +10,5 @@
     - MATLAB scripts to process experimental data
 
 - usage:
-  find installation guide [here](installation_guide.md)
+  find installation guide [here](installDensePose.md)
   
