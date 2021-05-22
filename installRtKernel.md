@@ -1,45 +1,93 @@
-# Real time kernel installation tutorial
+## Real time kernel installation tutorial
+- author: Xihan Ma
+- date: 05-22-2021
+---
 
-This is a markdown file.
+### Option 1 (suggested to try first) - install older version of real-time kernel (**rt10**)
+find guide [here](https://frankaemika.github.io/docs/installation_linux.html) in **Setting up the real-time kernel** section
+
+### Option 2 - install newer version of real-time kernel (**rt44**)
+follow this guide if option 1 doesn't work
+
 *Reference:* <https://index.ros.org/doc/ros2/Tutorials/Building-Realtime-rt_preempt-kernel-for-ROS-2/>
 
-use <kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>T</kbd> to open a terminal
+```sh
+mkdir ~/kernel
+cd ~/kernel
+```
 
-    mkdir ~/kernel
-    cd kernel
-    wget https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/linux-4.16.18.tar.gz
+We can go with a browser to https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/ and see if the version is there. You can download it from the site and move it manually from /Downloads to the /kernel folder, or download it using wget by right clicking the link using “copy link location”.
+```sh
+wget https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-5.4.78.tar.gz
+tar -xzf linux-5.4.78.tar.gz
+```
 
-you can also find other linux version in <https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/>
-dowmload patch-4.16.18-rt12.patch.gz to `/kernel` from <http://cdn.kernel.org/pub/linux/kernel/projects/rt/4.16/>
+download rt_preempt patch matching the Kernel version we just downloaded over at http://cdn.kernel.org/pub/linux/kernel/projects/rt/5.4/
 
-    tar -xzf linux-4.16.18.tar.gz 
-    mv linux-4.16.18 linux-4.16.18-rt12
-    gunzip patch-4.16.18-rt12.patch.gz 
-    cd linux-4.16.18-rt12/
-    patch -p1 < ../patch-4.16.18-rt12.patch 
+```sh
+wget http://cdn.kernel.org/pub/linux/kernel/projects/rt/5.4/older/patch-5.4.78-rt44.patch.gz
+gunzip patch-5.4.78-rt44.patch.gz
+cd linux-5.4.78/
+patch -p1 < ../patch-5.4.78-rt44.patch
+```
 
-check with command line: `uname -srm`
-you will see something like: *Linux 4.15.0-66-generic x86_64*
-change the linux version of the following line to what you just get.
+We simply want to use the config of our Ubuntu installation, so we get the Ubuntu config with
+```sh
+cp /boot/config-5.4.0-54-generic .config
+```
+Open Software & Updates. in the Ubuntu Software menu tick the ‘Source code’ box
+We need some tools to build kernel, install them with
+```sh
+sudo apt-get build-dep linux
+sudo apt-get install libncurses-dev flex bison openssl libssl-dev dkms libelf-dev libudev-dev libpci-dev libiberty-dev autoconf fakeroot
+```
+To enable all Ubuntu configurations, we simply use
+```sh
+yes '' | make oldconfig
+```
+Then we need to enable rt_preempt in the kernel.
+```sh
+make menuconfig
+```
+and set the following
 
-    cp /boot/config-4.15.0-66-generic .config
-    sudo apt-get install bison
-    sudo apt-get install flex
-    yes '' | make oldconfig
-    sudo apt install libncurses5-dev build-essential libssl-dev ccache
-    make menuconfig
+- Enable CONFIG_PREEMPT_RT
+ -> General Setup
+  -> Preemption Model (Fully Preemptible Kernel (Real-Time))
+   (X) Fully Preemptible Kernel (Real-Time)
 
-choose under “Processor Type and Features” — “Preemption Model” — “Fully Preemptible kernel (RT)”
+Save and exit menuconfig. 
 
-use up and down to select
-use left and right to switch between "select" and "exit"
-use enter to confirm
+build the kernel and generate debian packages. (10-30min)
+```sh
+make -j `nproc` deb-pkg
+sudo dpkg -i ../*.deb
+```
+reboot the system, when entering grub interface, select advanced options for ubuntu -> real-time kernel to boot
 
-    make -j8
+ verify the kernel version
+```sh
+uname -r
+```
 
-**you can use make -j4 if you have 4-cores CPU. This may takes a long time.**
+finally
+```sh
+sudo addgroup realtime
+sudo usermod -a -G realtime $(whoami)
+```
 
-This may takes more than 1 hour to finish. Be patient and don't just use your battery.
+Afterwards, add the following limits to the realtime group in **/etc/security/limits.conf**:
+```
+@realtime soft rtprio 99
+@realtime soft priority 99
+@realtime soft memlock 102400
+@realtime hard rtprio 99
+@realtime hard priority 99
+@realtime hard memlock 102400
+```
 
-    sudo make modules_install
-    sudo make install
+### Debugging
+1. when building the kernel: `recipe for target 'deb-pkg' failed`
+> - check building dependencies
+> - check this [answer](https://superuser.com/questions/925079/compile-linux-kernel-deb-pkg-target-without-generating-dbg-package)
+> - use `make -j1 deb-pkg` to see the intermediate error message
